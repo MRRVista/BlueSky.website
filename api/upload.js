@@ -1,5 +1,6 @@
 import { getSession, readJson as readBody, sameOrigin } from "../lib/auth.js";
 import { readJson, writeJson, PORTFOLIO_PATH } from "../lib/store.js";
+import { validateBenchmark } from "../lib/benchmarks.js";
 import { put } from "@vercel/blob";
 import { detectType, parseTransactions, parseRealized, parsePositions, parseIncome, parseBalances } from "../lib/schwab.js";
 import { readDocs, newId, safeName, DOCS_PATH } from "../lib/docs.js";
@@ -100,6 +101,17 @@ export default async function handler(req, res) {
     const d = String(body.removeValuation);
     p.valuations = p.valuations.filter((x) => x.date !== d);
     results.push({ name: "Valuation", type: "valuation", ok: true, message: `Valuation for ${d} removed.` });
+  }
+
+  // Benchmark proxy blend, shared by everyone who signs in
+  if (body.benchmark) {
+    try {
+      const cfg = validateBenchmark(body.benchmark);
+      p.settings = { ...(p.settings || {}), benchmark: { ...cfg, savedBy: session.email, savedAt: now } };
+      results.push({ name: "Benchmark", type: "benchmark", ok: true, message: "Benchmark blend saved." });
+    } catch (err) {
+      return res.status(400).json({ error: err.message, results });
+    }
   }
 
   // Keep every original export permanently in the document repository ("Schwab exports").
