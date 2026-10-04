@@ -4,7 +4,7 @@
   const results = document.getElementById("results");
   const valsEl = document.getElementById("vals");
   const historyEl = document.getElementById("history");
-  const usd = (n) => "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const usd = (n) => (Number(n) < 0 ? "−" : "") + "$" + Math.abs(Number(n)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmt = (iso) => { const [y, m, d] = iso.slice(0, 10).split("-"); return `${+m}/${+d}/${y}`; };
   const h = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 
@@ -49,14 +49,146 @@
   }
 
   async function sendFiles(fileList) {
-    const files = [...fileList].filter((f) => /\.(csv|xlsx|xls)$/i.test(f.name) || f.type === "text/csv");
-    if (!files.length) { results.replaceChildren(h("p", "msg err", "Choose CSV or Excel files exported from Schwab.")); return; }
+    const all = [...fileList];
+    const pdfs = all.filter((f) => /\.pdf$/i.test(f.name) || f.type === "application/pdf");
+    const files = all.filter((f) => !pdfs.includes(f) && (/\.(csv|xlsx|xls)$/i.test(f.name) || f.type === "text/csv"));
+    if (!files.length && !pdfs.length) { results.replaceChildren(h("p", "msg err", "Choose CSV or Excel exports, or statement PDFs, from Schwab.")); return; }
+    if (pdfs.length) handlePdfs(pdfs);
+    if (!files.length) { input.value = ""; return; }
     if (files.some((f) => f.size > 3.5e6)) { results.replaceChildren(h("p", "msg err", "One file is over 3.5 MB. Export a shorter date range and upload again.")); return; }
     results.replaceChildren(h("p", "msg", `Uploading ${files.length} file${files.length > 1 ? "s" : ""}…`));
     let payload;
     try { payload = await Promise.all(files.map(async (f) => ({ name: f.name, text: await toText(f) }))); }
     catch { results.replaceChildren(h("p", "msg err", "An Excel file couldn't be opened here. Upload the original CSV from Schwab instead.")); return; }
     showResults(await post({ files: payload }));
+  }
+
+
+  /* ---------- Statement PDFs: read in the browser, confirm, then save ---------- */
+  const stmts = document.getElementById("stmts");
+  let currentVals = [];
+  const ACCOUNT_TAIL = "965";
+  const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const addDays = (iso, n) => new Date(Date.parse(iso + "T00:00:00Z") + n * 864e5).toISOString().slice(0, 10);
+  const el = (tag, cls, ...kids) => { const n = h(tag, cls); kids.flat().forEach((k) => k != null && n.append(k.nodeType ? k : document.createTextNode(String(k)))); return n; };
+
+  let pdfLib = null;
+  function loadPdf() {
+    if (pdfLib) return pdfLib;
+    pdfLib = new Promise((resolve, reject) => {
+      const sc = document.createElement("script");
+      sc.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+      sc.onload = () => { window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"; resolve(window.pdfjsLib); };
+      sc.onerror = () => { pdfLib = null; reject(new Error("pdf")); };
+      document.head.append(sc);
+    });
+    return pdfLib;
+  }
+  async function readPdf(f) {
+    const lib = await loadPdf();
+    const doc = await lib.getDocument({ data: new Uint8Array(await f.arrayBuffer()) }).promise;
+    const lines = [];
+    for (let p = 1; p <= Math.min(doc.numPages, 4); p++) {
+      const tc = await (await doc.getPage(p)).getTextContent();
+      lines.push(...window.BSStatement.linesFromItems(tc.items));
+    }
+    return { lines, pages: doc.numPages };
+  }
+  async function fileToDocuments(f, label, docDate) {
+    const call = async (body) => {
+      const r = await fetch("/api/docs", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || "Couldn't file the PDF.");
+      return d;
+    };
+    const sig = await call({ op: "sign", filename: f.name, size: f.size });
+    const put = await fetch(sig.url, { method: "PUT", headers: { "Content-Type": "application/pdf" }, body: f });
+    if (!put.ok) throw new Error("The PDF didn't upload to Documents.");
+    await call({ op: "commit", id: sig.id, pathname: sig.pathname, filename: f.name, label, category: "Schwab statements", docDate, notes: "Uploaded on the Upload page; values read from the PDF and confirmed." });
+  }
+
+  async function handlePdfs(pdfs) {
+    input.value = "";
+    for (const f of pdfs) {
+      const card = el("div", "stmt-card", el("h4", null, f.name), el("p", "note", "Reading the statement…"));
+      stmts.prepend(card);
+      if (f.size > 25e6) { card.replaceChildren(el("h4", null, f.name), el("p", "msg err", "This PDF is over 25 MB. Statements are usually under 1 MB; check it's the right file.")); continue; }
+      let read, r;
+      try { read = await readPdf(f); r = window.BSStatement.parseStatement(read.lines); }
+      catch (e) { card.replaceChildren(el("h4", null, f.name), el("p", "msg err", e.message === "pdf" ? "The PDF reader didn't load. Check the connection and try again." : "This PDF couldn't be opened. Download the statement from Schwab again and retry.")); continue; }
+      if (read.lines.length < 5) { card.replaceChildren(el("h4", null, f.name), el("p", "msg err", "This PDF has no readable text (it may be a scan or a photo). Download the statement from Schwab as a PDF, or type the ending value in the form below.")); continue; }
+      renderCard(card, f, r);
+    }
+  }
+
+  function renderCard(card, f, r) {
+    const end = r.period && r.period.end;
+    const title = end ? `Schwab statement, ${MONTHS[+end.slice(5, 7) - 1]} ${end.slice(0, 4)}` : f.name;
+    const dateIn = Object.assign(h("input"), { type: "date", value: end || "" });
+    const valIn = Object.assign(h("input"), { type: "number", step: "0.01", value: r.ending ? r.ending.value.toFixed(2) : "" });
+    const found = el("dl", "stmt-found");
+    const row = (label, item, fmtFn) => found.append(el("dt", null, label), el("dd", null, item ? fmtFn(item) : el("span", "muted", "not found"), item ? el("small", "muted", ` from “${item.line}”`) : null));
+    row("Statement period", r.period, (x) => (x.start ? `${fmt(x.start)} – ${fmt(x.end)}` : `as of ${fmt(x.end)}`));
+    row("Beginning value", r.beginning, (x) => usd(x.value));
+    row("Ending value", r.ending, (x) => usd(x.value));
+    row("Deposits", r.deposits, (x) => usd(x.value));
+    row("Withdrawals", r.withdrawals, (x) => usd(x.value));
+    row("Dividends and interest", r.income, (x) => usd(x.value));
+
+    // Checks against what's already on file
+    const checks = el("ul", "stmt-checks");
+    const add = (ok, text) => checks.append(el("li", ok === true ? "ok" : ok === false ? "warn" : "info", (ok === true ? "✓ " : ok === false ? "! " : "· ") + text));
+    if (!r.schwab) add(false, "The word “Schwab” doesn't appear on the first pages. Check this is a Schwab statement.");
+    if (r.account) add(r.account.endsWith(ACCOUNT_TAIL), r.account.endsWith(ACCOUNT_TAIL) ? `Account …${ACCOUNT_TAIL}.` : `This statement is for account …${r.account}, not …${ACCOUNT_TAIL}.`);
+    if (!r.ending) add(false, "The ending value wasn't found. Type it in from page 1 before saving.");
+    if (!end) add(false, "The statement period wasn't found. Enter the statement's end date before saving.");
+    let saveBegin = null;
+    if (r.period && r.period.start && r.beginning) {
+      const prior = addDays(r.period.start, -1);
+      const onFile = currentVals.find((v) => v.date === prior);
+      if (onFile) {
+        const diff = Math.abs(onFile.value - r.beginning.value);
+        add(diff < 1, diff < 1 ? `Beginning value matches the ${fmt(prior)} value on file.` : `Beginning value ${usd(r.beginning.value)} differs from the ${usd(onFile.value)} on file for ${fmt(prior)} (${onFile.source}).`);
+      } else {
+        saveBegin = Object.assign(h("input"), { type: "checkbox", checked: true });
+        checks.append(el("li", "info", el("label", "stmt-opt", saveBegin, ` Also save the beginning value, ${usd(r.beginning.value)}, as the ${fmt(prior)} account value (none is on file).`)));
+      }
+    }
+    if (end && r.ending) {
+      const same = currentVals.find((v) => v.date === end);
+      if (same) { const diff = Math.abs(same.value - r.ending.value); add(diff < 1 ? true : null, diff < 1 ? `Matches the ${fmt(end)} value already on file.` : `Replaces the ${usd(same.value)} on file for ${fmt(end)} (${same.source}).`); }
+    }
+
+    const msg = el("p", "msg");
+    const save = Object.assign(h("button", "btn-small", "Confirm and save"), { type: "button" });
+    const discard = Object.assign(h("button", "link-button dark", "Discard"), { type: "button" });
+    discard.addEventListener("click", () => card.remove());
+    save.addEventListener("click", async () => {
+      const date = dateIn.value, value = Number(valIn.value);
+      if (!date || !valIn.value || !(value > 0)) { msg.className = "msg err"; msg.textContent = "Enter the statement end date and the ending value first."; return; }
+      save.disabled = true; msg.className = "msg"; msg.textContent = "Saving…";
+      const res = await post({ valuation: { date, value, from: "pdf", file: f.name } });
+      if (!res || res.error) { msg.className = "msg err"; msg.textContent = (res && res.error) || "Couldn't save. Try again."; save.disabled = false; return; }
+      const done = [`${fmt(date)} account value ${usd(value)} saved.`];
+      if (saveBegin && saveBegin.checked) {
+        const prior = addDays(r.period.start, -1);
+        const res2 = await post({ valuation: { date: prior, value: r.beginning.value, from: "pdf-begin", file: f.name } });
+        done.push(res2 && !res2.error ? `${fmt(prior)} value ${usd(r.beginning.value)} saved.` : `The ${fmt(prior)} value couldn't be saved.`);
+      }
+      try { await fileToDocuments(f, title, date); done.push("PDF filed in Documents under Schwab statements."); }
+      catch (e) { done.push(`The values are saved, but ${e.message.toLowerCase()} Add it on the Documents tab.`); }
+      card.replaceChildren(el("h4", null, title), el("p", "msg ok", done.join(" ")));
+      load();
+    });
+
+    card.replaceChildren(
+      el("h4", null, title, el("small", "muted", `  ${f.name}`)),
+      found, checks,
+      el("div", "tax-form",
+        el("label", "tax-field", el("span", null, "Statement end date"), dateIn),
+        el("label", "tax-field", el("span", null, "Ending account value (net) $"), valIn),
+        el("div", "tax-field", el("span", null, "\u00a0"), el("div", "stmt-btns", save, discard))),
+      msg);
   }
 
   drop.addEventListener("click", () => input.click());
@@ -77,6 +209,7 @@
     const r = await fetch("/api/upload", { credentials: "same-origin" });
     if (!r.ok) return;
     const d = await r.json();
+    currentVals = d.valuations || [];
     const labels = { transactions: "Transactions", positions: "Positions", realized: "Realized Gain/Loss", income: "Investment Income", balances: "Balances" };
     Object.keys(labels).forEach((k) => {
       const el = document.getElementById("st-" + k);

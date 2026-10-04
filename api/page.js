@@ -67,16 +67,17 @@ function uploadPage(email) {
     body: `<main class="report" style="display:block;text-align:left;max-width:82rem">
       <article class="sheet dash">
         <h2>Upload account files</h2>
-        <p class="lede">Drop in Schwab exports. The dashboard updates as soon as they're saved. Files stay private to this site.</p>
+        <p class="lede">Drop in Schwab exports and monthly statement PDFs. The dashboard updates as soon as they're saved. Files stay private to this site.</p>
         <div class="dropzone" id="drop" tabindex="0" role="button" aria-describedby="drop-hint">
           <p><strong>Drop files here</strong> or click to choose</p>
-          <p class="note" id="drop-hint">CSV straight from Schwab, or the same file saved as Excel (.xlsx). Drop several at once; each is identified from its column headers, not its file name.</p>
-          <input type="file" id="file" accept=".csv,.xlsx,.xls,text/csv" multiple hidden>
+          <p class="note" id="drop-hint">CSV straight from Schwab (or saved as Excel), and monthly statement PDFs. Drop several at once; each is identified from its contents, not its file name.</p>
+          <input type="file" id="file" accept=".csv,.xlsx,.xls,.pdf,text/csv,application/pdf" multiple hidden>
         </div>
         <div id="results" class="results" role="status" aria-live="polite"></div>
+        <div id="stmts"></div>
 
         <div class="dash-sec"><h3>The files, and where to get them in Schwab</h3>
-          <p class="note">Monthly routine: after each statement posts, export Transactions, Positions and Realized Gain/Loss, drop all three here, then type the statement's ending value below.</p></div>
+          <p class="note">Monthly routine: after each statement posts, export Transactions, Positions and Realized Gain/Loss, drop all three here, then drop that month's statement PDF (or type its ending value below).</p></div>
         <div class="ftypes">
           <div class="ftype"><h4>1. Transactions <span class="tag req">Required</span></h4>
             <p class="where">Accounts → History → Transactions. Date range: <em>Previous 4 years</em> (or year to date) → Export.</p>
@@ -93,9 +94,9 @@ function uploadPage(email) {
             <p>Every closed lot: short- vs long-term, wash sales and deferred losses. Drives the Tax tab and realized figures. Each upload replaces that tax year.</p>
             <p class="where">Recognized by the first line <code>Realized Gain/Loss - Lot Details</code>.</p>
             <p class="status" id="st-realized"></p></div>
-          <div class="ftype"><h4>4. Statement ending value <span class="tag req">Required</span></h4>
-            <p class="where">Page 1 of each monthly Schwab statement, typed in the form below.</p>
-            <p>Time-weighted returns link one month-end value to the next. Without a month-end value, that month and any window starting there can't be measured.</p></div>
+          <div class="ftype"><h4>4. Monthly statement (PDF) <span class="tag req">Required</span></h4>
+            <p class="where">Accounts → Statements &amp; Tax Forms → download the monthly statement PDF and drop it here. Or type the ending value from page 1 in the form below.</p>
+            <p>Time-weighted returns link one month-end value to the next. Without a month-end value, that month and any window starting there can't be measured. The site reads the statement period and the beginning and ending values, shows what it found, and saves only after you confirm. The PDF is filed in Documents.</p></div>
           <div class="ftype"><h4>5. Balances <span class="tag">Optional</span></h4>
             <p class="where">Accounts → Balances → Export.</p>
             <p>If the file shows a labeled <em>Account Value</em>, it's added as a valuation point for its date; otherwise it's kept for reference.</p>
@@ -120,7 +121,7 @@ function uploadPage(email) {
         <p style="margin-top:1.5rem"><a href="/home#performance" style="color:#183763">Go to the dashboard</a></p>
       </article>
     </main>`,
-    script: `<script src="/upload.js" defer></script>`,
+    script: `<script src="/statement.js" defer></script><script src="/upload.js" defer></script>`,
   });
 }
 
