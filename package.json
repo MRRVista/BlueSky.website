@@ -1,0 +1,9 @@
+{
+  "name": "bluesky-website",
+  "private": true,
+  "type": "module",
+  "description": "bluesky.website \u2014 Blue Sky Investment Group sign-in and site",
+  "dependencies": {
+    "@vercel/blob": "^2.8.0"
+  }
+}
