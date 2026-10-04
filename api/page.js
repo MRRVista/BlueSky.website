@@ -16,6 +16,7 @@ function shell({ title, email, body, script = "", variant = "" }) {
   <link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/report.css">
+  <link rel="stylesheet" href="/dash.css">
 </head>
 <body>
   <div class="sky${variant ? " sky--" + variant : ""}">
@@ -23,6 +24,7 @@ function shell({ title, email, body, script = "", variant = "" }) {
       <a href="/home" aria-label="Blue Sky Investment Group home"><img class="logo logo--small" src="/logo.webp" alt="Blue Sky Investment Group LLC" width="479" height="340"></a>
       <nav aria-label="Account">
         <span class="who">${esc(email)}</span>
+        <a href="/upload">Upload files</a>
         <a href="/account">Change password</a>
         <form method="post" action="/api/logout" id="signout"><button class="link-button" type="submit">Sign out</button></form>
       </nav>
@@ -51,7 +53,49 @@ function homePage(email) {
     <main class="report" id="report" style="display:block;text-align:left;max-width:82rem">
       <p class="report-state">Loading the report…</p>
     </main>`,
-    script: `<script src="/report.js" defer></script>`,
+    script: `<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" defer></script>
+    <script src="/dash.js" defer></script>
+    <script src="/report.js" defer></script>`,
+  });
+}
+
+function uploadPage(email) {
+  return shell({
+    title: "Upload files",
+    email,
+    variant: "report",
+    body: `<main class="report" style="display:block;text-align:left;max-width:82rem">
+      <article class="sheet dash">
+        <h2>Upload account files</h2>
+        <p class="lede">Drop in Schwab CSV exports. The dashboard updates as soon as they're saved. Files stay private to this site.</p>
+        <div class="dropzone" id="drop" tabindex="0" role="button" aria-describedby="drop-hint">
+          <p><strong>Drop CSV files here</strong> or click to choose</p>
+          <p class="note" id="drop-hint">Transactions, Positions, Realized Gain/Loss (lot details) and Investment Income. Several at once is fine; the type is detected automatically.</p>
+          <input type="file" id="file" accept=".csv,text/csv" multiple hidden>
+        </div>
+        <div id="results" class="results" role="status" aria-live="polite"></div>
+
+        <div class="dash-sec"><h3>Add a statement value</h3>
+          <p class="note">Time-weighted returns need the account value at each month-end. Enter the ending account value from page 1 of each Schwab statement. Positions uploads add a value automatically for their date.</p></div>
+        <div class="tax-form" id="valform">
+          <label class="tax-field"><span>Statement date</span><input id="v-date" type="date"></label>
+          <label class="tax-field"><span>Ending account value (net) $</span><input id="v-value" type="number" step="0.01"></label>
+          <div class="tax-field"><span>&nbsp;</span><button class="btn-small" id="v-save" type="button">Save value</button></div>
+        </div>
+        <div id="vals"></div>
+
+        <div class="dash-sec"><h3>What to export from Schwab each month</h3></div>
+        <ul class="jason">
+          <li><strong>Transactions:</strong> History → Transactions → date range "Previous 4 years" or year to date → Export. Overlapping exports are merged without double-counting.</li>
+          <li><strong>Positions:</strong> Positions → Export, ideally on the last business day of the month.</li>
+          <li><strong>Realized Gain/Loss:</strong> Realized Gain/Loss → Lot Details → year to date → Export. Each upload replaces that year.</li>
+          <li><strong>Investment Income:</strong> set the date range from January 1 before exporting, or it comes out empty.</li>
+        </ul>
+        <div id="history"></div>
+        <p style="margin-top:1.5rem"><a href="/home#performance" style="color:#183763">Go to the dashboard</a></p>
+      </article>
+    </main>`,
+    script: `<script src="/upload.js" defer></script>`,
   });
 }
 
@@ -117,7 +161,7 @@ export default async function handler(req, res) {
     res.writeHead(302, { Location: "/" });
     return res.end();
   }
-  const page = req.query.p === "account" ? accountPage(session.email) : homePage(session.email);
+  const page = req.query.p === "account" ? accountPage(session.email) : req.query.p === "upload" ? uploadPage(session.email) : homePage(session.email);
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   return res.status(200).send(page);
 }

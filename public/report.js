@@ -83,14 +83,30 @@
     return wrap;
   }
 
-  function show(slug) {
-    const sheet = data.sheets.find((s) => s.slug === slug) || data.sheets[0];
+  let analytics = null;
+
+  function setActive(slug) {
     tabsEl.querySelectorAll("a").forEach((a) => {
-      if (a.dataset.slug === sheet.slug) a.setAttribute("aria-current", "page");
+      if (a.dataset.slug === slug) a.setAttribute("aria-current", "page");
       else a.removeAttribute("aria-current");
     });
     const active = tabsEl.querySelector('[aria-current="page"]');
     if (active) active.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+
+  function show(slug) {
+    const dashTab = analytics && window.BSDash && window.BSDash.tabs.find((t) => t.slug === slug);
+    if (dashTab || (!slug && analytics && window.BSDash)) {
+      const t = dashTab || window.BSDash.tabs[0];
+      setActive(t.slug);
+      try { window.BSDash.render(t.slug, reportEl, analytics); }
+      catch (e) { console.error(e); reportEl.replaceChildren(el("p", { class: "report-state" }, "This view couldn't be drawn. Refresh the page to try again.")); }
+      document.title = `${t.name} | Blue Sky Investment Group`;
+      return;
+    }
+    if (!data) return;
+    const sheet = data.sheets.find((s) => s.slug === slug) || data.sheets[0];
+    setActive(sheet.slug);
     reportEl.replaceChildren(renderSheet(sheet));
     const meta = el("p", { class: "sheet-meta" }, `From ${data.source}`);
     reportEl.firstChild.append(meta);
@@ -101,21 +117,32 @@
     show(decodeURIComponent(location.hash.replace(/^#/, "")));
   }
 
-  fetch("/api/report", { credentials: "same-origin" })
-    .then((r) => {
-      if (r.status === 401) { location.replace("/"); throw new Error("signed out"); }
-      if (!r.ok) throw new Error("load failed");
-      return r.json();
-    })
-    .then((json) => {
-      data = json;
+  const getJson = (url) => fetch(url, { credentials: "same-origin" }).then((r) => {
+    if (r.status === 401) { location.replace("/"); throw new Error("signed out"); }
+    return r.ok ? r.json() : null;
+  });
+
+  Promise.all([getJson("/api/analytics").catch(() => null), getJson("/api/report").catch(() => null)])
+    .then(([a, r]) => {
+      analytics = a;
+      data = r;
+      if (!analytics && !data) throw new Error("load failed");
       const ul = el("ul");
-      data.sheets.forEach((s) => {
-        const li = el("li");
-        const a = el("a", { href: `#${s.slug}`, "data-slug": s.slug }, s.name);
-        li.append(a);
-        ul.append(li);
-      });
+      if (analytics && window.BSDash) {
+        window.BSDash.tabs.forEach((t) => {
+          const li = el("li");
+          li.append(el("a", { href: `#${t.slug}`, "data-slug": t.slug }, t.name));
+          ul.append(li);
+        });
+      }
+      if (data) {
+        if (analytics) ul.append(el("li", { class: "tab-sep", "aria-hidden": "true" }));
+        data.sheets.forEach((s) => {
+          const li = el("li");
+          li.append(el("a", { href: `#${s.slug}`, "data-slug": s.slug }, s.name));
+          ul.append(li);
+        });
+      }
       tabsEl.replaceChildren(ul);
       window.addEventListener("hashchange", () => { route(); window.scrollTo({ top: 0 }); });
       route();

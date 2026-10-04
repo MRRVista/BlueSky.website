@@ -4,6 +4,7 @@
   "rewrites": [
     { "source": "/home", "destination": "/api/page?p=home" },
     { "source": "/account", "destination": "/api/page?p=account" },
+    { "source": "/upload", "destination": "/api/page?p=upload" },
     { "source": "/logo.webp", "destination": "/api/asset?f=logo" },
     { "source": "/favicon.png", "destination": "/api/asset?f=favicon" },
     { "source": "/favicon.ico", "destination": "/api/asset?f=favicon" }
