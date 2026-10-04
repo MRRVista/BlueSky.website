@@ -149,3 +149,20 @@ details.lots summary { cursor: pointer; color: #183763; font-weight: 500; }
 .bs-dialog .grid td, .bs-dialog .grid th { padding: 0.45rem 0.6rem; }
 .bs-dialog td.neg { color: #b42318; }
 @media (max-width: 600px) { .periodbar .pb-label { flex-basis: 100%; min-width: 0; } }
+
+/* Statement PDF confirm cards (Upload page) */
+.stmt-card { background: #fff; border: 1px solid #e3e9f2; border-left: 3px solid var(--gold); border-radius: 8px; padding: 1rem 1.1rem; margin: 0.75rem 0; }
+.stmt-card h4 { margin: 0 0 0.6rem; font-weight: 500; font-size: 1rem; color: #0c1c36; }
+.stmt-found { display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 1rem; margin: 0 0 0.75rem; font-size: 0.9rem; }
+.stmt-found dt { color: #4a5b78; }
+.stmt-found dd { margin: 0; color: #0c1c36; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.stmt-found small { font-size: 0.78rem; }
+.stmt-checks { list-style: none; padding: 0; margin: 0 0 0.5rem; font-size: 0.875rem; }
+.stmt-checks li { margin: 0.25rem 0; }
+.stmt-checks li.ok { color: #1f6b3f; }
+.stmt-checks li.warn { color: #b42318; }
+.stmt-checks li.info { color: #263753; }
+.stmt-card label.stmt-opt { display: inline; margin: 0; color: #263753; font-size: 0.875rem; font-weight: 400; letter-spacing: normal; text-transform: none; }
+.stmt-opt input { width: auto; margin-right: 0.35rem; vertical-align: middle; }
+.stmt-btns { display: flex; gap: 1rem; align-items: center; }
+@media (max-width: 600px) { .stmt-found { grid-template-columns: 1fr; } .stmt-found dt { margin-top: 0.4rem; } }

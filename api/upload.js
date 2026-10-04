@@ -93,7 +93,11 @@ export default async function handler(req, res) {
   if (body.valuation && body.valuation.date && Number.isFinite(Number(body.valuation.value))) {
     const d = String(body.valuation.date).slice(0, 10);
     if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
-      upsertValuation(p, { date: d, value: Number(body.valuation.value), source: "Manual entry (statement value) by " + session.email });
+      const file = String(body.valuation.file || "").slice(0, 160);
+      const source = body.valuation.from === "pdf" ? `Statement PDF (${file}), confirmed by ${session.email}`
+        : body.valuation.from === "pdf-begin" ? `Statement PDF beginning value (${file}), confirmed by ${session.email}`
+        : "Manual entry (statement value) by " + session.email;
+      upsertValuation(p, { date: d, value: Number(body.valuation.value), source });
       results.push({ name: "Valuation", type: "valuation", ok: true, message: `Account value for ${d} saved.` });
     }
   }
