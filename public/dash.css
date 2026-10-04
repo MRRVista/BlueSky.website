@@ -130,3 +130,22 @@ details.lots summary { cursor: pointer; color: #183763; font-weight: 500; }
 .bm-total.bad { color: #b42318; }
 .bm-lev { margin-top: 1rem; }
 .btn-small.ghost { background: #fff; border: 1px solid #c9a262; }
+
+/* Period picker: years, months, custom range */
+.periodpick { margin: 0.25rem 0 1.1rem; }
+.periodpick .periodbar { margin: 0 0 0.4rem; }
+.periodbar .pb-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: #6a7a94; min-width: 8rem; }
+.pb-date { display: inline-flex; align-items: center; gap: 0.35rem; margin: 0; font-size: 0.8125rem; color: #4a5b78; }
+.pb-date input { font: inherit; font-size: 0.85rem; color: #0c1c36; background: #fff; border: 1px solid #c9d4e3; border-radius: 999px; padding: 0.3rem 0.7rem; width: auto; }
+.pb-date input:focus { outline: none; border-color: var(--gold); box-shadow: 0 0 0 3px rgba(201, 162, 98, 0.28); }
+.pb-showing { font-size: 0.875rem; color: #263753; margin: 0.35rem 0 0; }
+/* Month-by-month popout */
+.bs-dialog { border: 0; border-radius: 10px; padding: 0; width: min(68rem, 94vw); max-height: 88vh; box-shadow: 0 24px 60px rgba(6, 18, 40, 0.45); color: #0c1c36; background: #f7f9fc; color-scheme: light; font-family: "Jost", system-ui, sans-serif; }
+.bs-dialog::backdrop { background: rgba(6, 18, 40, 0.55); }
+.bs-dialog-body { padding: 1.25rem 1.4rem 1.4rem; }
+.bs-dialog-head { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; margin-bottom: 0.5rem; }
+.bs-dialog-head h3 { margin: 0; font-weight: 500; font-size: 1.1rem; }
+.bs-dialog .note { font-size: 0.8125rem; color: #5a6b86; margin: 0.6rem 0 0; max-width: 90ch; }
+.bs-dialog .grid td, .bs-dialog .grid th { padding: 0.45rem 0.6rem; }
+.bs-dialog td.neg { color: #b42318; }
+@media (max-width: 600px) { .periodbar .pb-label { flex-basis: 100%; min-width: 0; } }
