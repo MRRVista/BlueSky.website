@@ -94,7 +94,19 @@
     if (active) active.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
 
+  const workTabs = () => (window.BSWork ? window.BSWork.tabs : []);
+
   function show(slug) {
+    const workTab = workTabs().find((t) => t.slug === slug);
+    if (workTab) {
+      setActive(workTab.slug);
+      try { window.BSWork.render(workTab.slug, reportEl); }
+      catch (e) { console.error(e); reportEl.replaceChildren(el("p", { class: "report-state" }, "This view couldn't be drawn. Refresh the page to try again.")); }
+      document.title = `${workTab.name} | Blue Sky Investment Group`;
+      return;
+    }
+    const replaced = workTabs().find((t) => t.replaces === slug);
+    if (replaced) { location.replace(`#${replaced.slug}`); return; }
     const dashTab = analytics && window.BSDash && window.BSDash.tabs.find((t) => t.slug === slug);
     if (dashTab || (!slug && analytics && window.BSDash)) {
       const t = dashTab || window.BSDash.tabs[0];
@@ -122,12 +134,20 @@
     return r.ok ? r.json() : null;
   });
 
-  Promise.all([getJson("/api/analytics").catch(() => null), getJson("/api/report").catch(() => null)])
+  const loadWork = window.BSWork ? Promise.resolve() : new Promise((res) => {
+    const sc = document.createElement("script");
+    sc.src = "/workspace.js";
+    sc.onload = res; sc.onerror = res;
+    document.head.append(sc);
+  });
+
+  Promise.all([getJson("/api/analytics").catch(() => null), getJson("/api/report").catch(() => null), loadWork])
     .then(([a, r]) => {
       analytics = a;
       data = r;
-      if (!analytics && !data) throw new Error("load failed");
+      if (!analytics && !data && !workTabs().length) throw new Error("load failed");
       const ul = el("ul");
+      const hidden = new Set(workTabs().map((t) => t.replaces).filter(Boolean));
       if (analytics && window.BSDash) {
         window.BSDash.tabs.forEach((t) => {
           const li = el("li");
@@ -135,9 +155,16 @@
           ul.append(li);
         });
       }
+      if (workTabs().length) {
+        workTabs().forEach((t) => {
+          const li = el("li");
+          li.append(el("a", { href: `#${t.slug}`, "data-slug": t.slug }, t.name));
+          ul.append(li);
+        });
+      }
       if (data) {
-        if (analytics) ul.append(el("li", { class: "tab-sep", "aria-hidden": "true" }));
-        data.sheets.forEach((s) => {
+        ul.append(el("li", { class: "tab-sep", "aria-hidden": "true" }));
+        data.sheets.filter((s) => !hidden.has(s.slug)).forEach((s) => {
           const li = el("li");
           li.append(el("a", { href: `#${s.slug}`, "data-slug": s.slug }, s.name));
           ul.append(li);
