@@ -1,6 +1,6 @@
 import { getSession, readJson as readBody, sameOrigin } from "../lib/auth.js";
 import { readJson, writeJson, PORTFOLIO_PATH } from "../lib/store.js";
-import { detectType, parseTransactions, parseRealized, parsePositions, parseIncome } from "../lib/schwab.js";
+import { detectType, parseTransactions, parseRealized, parsePositions, parseIncome, parseBalances } from "../lib/schwab.js";
 
 export const config = { api: { bodyParser: { sizeLimit: "4mb" } } };
 
@@ -32,7 +32,8 @@ export default async function handler(req, res) {
   const p = (await readJson(PORTFOLIO_PATH)) || { transactions: [], realized: {}, positions: null, positionsHistory: [], valuations: [], files: [] };
 
   if (req.method === "GET") {
-    return res.status(200).json({ files: p.files.slice(-40).reverse(), valuations: p.valuations, transactions: p.transactions.length, positionsAsOf: p.positions && p.positions.asOf, realizedYears: Object.keys(p.realized) });
+    const lastOf = (t) => { const f = [...p.files].reverse().find((x) => x.type === t); return f ? { name: f.name, uploadedAt: f.uploadedAt, by: f.by } : null; };
+    return res.status(200).json({ onFile: { transactions: lastOf("transactions"), positions: lastOf("positions"), realized: lastOf("realized"), income: lastOf("income"), balances: lastOf("balances") }, files: p.files.slice(-40).reverse(), valuations: p.valuations, transactions: p.transactions.length, positionsAsOf: p.positions && p.positions.asOf, realizedYears: Object.keys(p.realized) });
   }
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed." });
   if (!sameOrigin(req)) return res.status(403).json({ error: "Request blocked." });
@@ -65,6 +66,15 @@ export default async function handler(req, res) {
         const inc = parseIncome(text);
         p.investmentIncome = inc;
         results.push({ name, type, ok: !inc.empty, message: inc.empty ? "This export has no rows. In Schwab, set the date range to start 1/1 of the year and export again." : `${inc.rows.length} rows stored.` });
+      } else if (type === "balances") {
+        const b = parseBalances(text);
+        p.balances = b;
+        if (b.asOf && b.value) {
+          upsertValuation(p, { date: b.asOf, value: b.value, source: "Schwab balances export" });
+          results.push({ name, type, ok: true, message: `Account value ${b.value.toLocaleString("en-US", { style: "currency", currency: "USD" })} on ${b.asOf} added as a valuation point.` });
+        } else {
+          results.push({ name, type, ok: true, message: "Balances saved. No clearly labeled account value was found, so no valuation point was added; use Add a statement value instead." });
+        }
       } else {
         results.push({ name, type: null, ok: false, message: "Not recognized. Upload Schwab Transactions, Positions, Realized Gain/Loss (lot details) or Investment Income CSV exports." });
         continue;

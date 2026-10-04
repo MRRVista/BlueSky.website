@@ -67,30 +67,55 @@ function uploadPage(email) {
     body: `<main class="report" style="display:block;text-align:left;max-width:82rem">
       <article class="sheet dash">
         <h2>Upload account files</h2>
-        <p class="lede">Drop in Schwab CSV exports. The dashboard updates as soon as they're saved. Files stay private to this site.</p>
+        <p class="lede">Drop in Schwab exports. The dashboard updates as soon as they're saved. Files stay private to this site.</p>
         <div class="dropzone" id="drop" tabindex="0" role="button" aria-describedby="drop-hint">
-          <p><strong>Drop CSV files here</strong> or click to choose</p>
-          <p class="note" id="drop-hint">Transactions, Positions, Realized Gain/Loss (lot details) and Investment Income. Several at once is fine; the type is detected automatically.</p>
-          <input type="file" id="file" accept=".csv,text/csv" multiple hidden>
+          <p><strong>Drop files here</strong> or click to choose</p>
+          <p class="note" id="drop-hint">CSV straight from Schwab, or the same file saved as Excel (.xlsx). Drop several at once; each is identified from its column headers, not its file name.</p>
+          <input type="file" id="file" accept=".csv,.xlsx,.xls,text/csv" multiple hidden>
         </div>
         <div id="results" class="results" role="status" aria-live="polite"></div>
 
+        <div class="dash-sec"><h3>The files, and where to get them in Schwab</h3>
+          <p class="note">Monthly routine: after each statement posts, export Transactions, Positions and Realized Gain/Loss, drop all three here, then type the statement's ending value below.</p></div>
+        <div class="ftypes">
+          <div class="ftype"><h4>1. Transactions <span class="tag req">Required</span></h4>
+            <p class="where">Accounts → History → Transactions. Date range: <em>Previous 4 years</em> (or year to date) → Export.</p>
+            <p>Every deposit, withdrawal, trade, distribution and margin-interest charge. Drives both return measures, income and the wash-sale dates. Overlapping exports merge without double-counting.</p>
+            <p class="where">Recognized by the columns <code>Date, Action, Symbol, Description, Amount</code>.</p>
+            <p class="status" id="st-transactions"></p></div>
+          <div class="ftype"><h4>2. Positions <span class="tag req">Required</span></h4>
+            <p class="where">Accounts → Positions → Export. Best on the last business day of the month.</p>
+            <p>Holdings, cost basis, unrealized gain, yields and distribution dates. Its net value becomes a valuation point for that date.</p>
+            <p class="where">Recognized by the first line <code>Positions for account … as of</code>.</p>
+            <p class="status" id="st-positions"></p></div>
+          <div class="ftype"><h4>3. Realized Gain/Loss, Lot Details <span class="tag req">Required</span></h4>
+            <p class="where">Accounts → Realized Gain/Loss → <em>Lot Details</em> view, date range year to date → Export.</p>
+            <p>Every closed lot: short- vs long-term, wash sales and deferred losses. Drives the Tax tab and realized figures. Each upload replaces that tax year.</p>
+            <p class="where">Recognized by the first line <code>Realized Gain/Loss - Lot Details</code>.</p>
+            <p class="status" id="st-realized"></p></div>
+          <div class="ftype"><h4>4. Statement ending value <span class="tag req">Required</span></h4>
+            <p class="where">Page 1 of each monthly Schwab statement, typed in the form below.</p>
+            <p>Time-weighted returns link one month-end value to the next. Without a month-end value, that month and any window starting there can't be measured.</p></div>
+          <div class="ftype"><h4>5. Balances <span class="tag">Optional</span></h4>
+            <p class="where">Accounts → Balances → Export.</p>
+            <p>If the file shows a labeled <em>Account Value</em>, it's added as a valuation point for its date; otherwise it's kept for reference.</p>
+            <p class="where">Recognized by the first line <code>Balances for account</code>.</p>
+            <p class="status" id="st-balances"></p></div>
+          <div class="ftype"><h4>6. Investment Income <span class="tag">Optional</span></h4>
+            <p class="where">Accounts → History → Investment Income. Set the start date to January 1 first, or the export comes out empty.</p>
+            <p>Not needed: income is already calculated from Transactions. Keep it as a cross-check against Schwab's own totals.</p>
+            <p class="where">Recognized by the first line <code>Investment Income</code>.</p>
+            <p class="status" id="st-income"></p></div>
+        </div>
+
         <div class="dash-sec"><h3>Add a statement value</h3>
-          <p class="note">Time-weighted returns need the account value at each month-end. Enter the ending account value from page 1 of each Schwab statement. Positions uploads add a value automatically for their date.</p></div>
+          <p class="note">Enter the ending account value from page 1 of the statement, net of the margin loan. Positions uploads add a value automatically for their date.</p></div>
         <div class="tax-form" id="valform">
           <label class="tax-field"><span>Statement date</span><input id="v-date" type="date"></label>
           <label class="tax-field"><span>Ending account value (net) $</span><input id="v-value" type="number" step="0.01"></label>
           <div class="tax-field"><span>&nbsp;</span><button class="btn-small" id="v-save" type="button">Save value</button></div>
         </div>
         <div id="vals"></div>
-
-        <div class="dash-sec"><h3>What to export from Schwab each month</h3></div>
-        <ul class="jason">
-          <li><strong>Transactions:</strong> History → Transactions → date range "Previous 4 years" or year to date → Export. Overlapping exports are merged without double-counting.</li>
-          <li><strong>Positions:</strong> Positions → Export, ideally on the last business day of the month.</li>
-          <li><strong>Realized Gain/Loss:</strong> Realized Gain/Loss → Lot Details → year to date → Export. Each upload replaces that year.</li>
-          <li><strong>Investment Income:</strong> set the date range from January 1 before exporting, or it comes out empty.</li>
-        </ul>
         <div id="history"></div>
         <p style="margin-top:1.5rem"><a href="/home#performance" style="color:#183763">Go to the dashboard</a></p>
       </article>
