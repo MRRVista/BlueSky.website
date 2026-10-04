@@ -69,6 +69,8 @@
   }
 
 
+  const addDaysIso = (iso, n) => new Date(Date.parse(iso + "T00:00:00Z") + n * 864e5).toISOString().slice(0, 10);
+
   /* ---------- reporting windows ---------- */
   let winKey = (() => { try { return sessionStorage.getItem("bs-win") || "YTD"; } catch { return "YTD"; } })();
   const windowsOf = (A) => A.performance.windows || [];
@@ -82,14 +84,14 @@
     const bar = h("div", { class: "periodbar", role: "group", "aria-label": "Reporting period" });
     windowsOf(A).forEach((w) => {
       const ok = mode === "cash" ? w.cashAvailable : w.available;
-      const reason = mode === "cash" ? `Transaction history starts ${fmtDate(A.income.firstDate)}.` : isoToUs(w.reason);
+      const reason = isoToUs(mode === "cash" ? (w.cashReason || `Transaction history starts ${A.income.firstDate}.`) : w.reason);
       const b = h("button", { type: "button", class: "pb" + (current && w.key === current.key ? " on" : ""), "aria-pressed": current && w.key === current.key ? "true" : "false", disabled: !ok, title: ok ? null : reason }, w.label);
       b.addEventListener("click", () => { winKey = w.key; try { sessionStorage.setItem("bs-win", w.key); } catch {} rerender(); });
       bar.append(b);
     });
     if (current) {
       const from = mode === "cash" ? current.cashStart : current.start;
-      bar.append(h("span", { class: "pb-range" }, `${fmtDate(from)} – ${fmtDate(current.end)}`));
+      bar.append(h("span", { class: "pb-range" }, `${fmtDate(addDaysIso(from, 1))} – ${fmtDate(current.end)}`));
     }
     return bar;
   }
@@ -122,6 +124,18 @@
     root.replaceChildren(s);
   }
 
+  // Performance starts at inception (3/1/2026, the day before the 3/2 refinance wire).
+  function inceptionNote(A) {
+    const I = A.inception;
+    if (!I || !I.start) return null;
+    const p = h("p", { class: "note" }, `Inception ${fmtDate(I.date)}: returns start from the ${fmtDate(I.start)} account value of ${usd(I.value)}. `);
+    if (I.estimated) {
+      const b = I.basis || {};
+      p.append(`That value is an estimate (${fmtDate(b.from)} value ${usd(b.priorValue)} + net deposits ${usd(b.flows)} + income ${usd(b.income)} + margin interest ${usd(b.interest)}); January–February market movement isn't in it. Enter the ${fmtDate(I.start)} statement ending value on the Upload page to make it exact.`);
+    }
+    return p;
+  }
+
   /* ================= PERFORMANCE ================= */
   function renderPerformance(root, A) {
     const rerender = () => renderPerformance(root, A);
@@ -129,8 +143,9 @@
     if (!w) return unavailable(root, "Performance", A, "perf", rerender);
     const P = perfView(A, w);
     const long = P.days >= 365;
-    const s = sheet("Performance", `Account …965, ${fmtDate(P.start)} through ${fmtDate(P.end)}. Returns are measured on net equity, after the margin loan, so they include the effect of leverage.`);
+    const s = sheet("Performance", `Account …965, ${fmtDate(addDaysIso(P.start, 1))} through ${fmtDate(P.end)}. Returns are measured on net equity, after the margin loan, so they include the effect of leverage.`);
     s.append(periodBar(A, "perf", rerender));
+    const inote = inceptionNote(A); if (inote) s.append(inote);
     s.append(kpis([
       { label: `Time-weighted return, ${P.label}`, value: pct(P.twr), sub: long ? `${pct(P.twrAnnualized)} annualized` : `cumulative over ${P.days} days`, lead: true },
       { label: `Money-weighted return, ${P.label}`, value: pct(P.mwr), sub: long ? "annualized, on your actual dollars" : `for the period; ${pct(P.mwrAnnualized)} if annualized` },
@@ -145,7 +160,7 @@
     s.append(section("Returns by period", "Every standard window at once. Longer windows fill in as history builds."));
     s.append(table([
       { label: "Period", get: (r) => h("strong", {}, r.label) },
-      { label: "From", num: 1, get: (r) => (r.available ? fmtDate(r.start) : "—") },
+      { label: "From", num: 1, get: (r) => (r.available ? fmtDate(addDaysIso(r.start, 1)) : "—") },
       { label: "Time-weighted", num: 1, get: (r) => (r.available ? pct(r.twr) + (r.estimated ? " *" : "") : "—"), raw: (r) => (r.available ? r.twr : null) },
       { label: "Annualized", num: 1, get: (r) => (r.available && r.twrAnnualized != null ? pct(r.twrAnnualized) : "—"), raw: (r) => r.twrAnnualized },
       { label: "Money-weighted", num: 1, get: (r) => (r.available ? pct(r.mwr) : "—"), raw: (r) => (r.available ? r.mwr : null) },
@@ -200,7 +215,7 @@
     // map foot keys
     const foot = s.querySelector("tfoot tr");
     if (foot) { const cells = foot.children; const vals = ["Total", "", usd(P.netContributions), usd(P.income), usd(P.interest), usd(P.realized), usd(P.unrealized), usd(P.totalGain), "", pct(P.twr)]; vals.forEach((v, i) => { cells[i].textContent = v; cells[i].classList.toggle("neg", String(v).startsWith("−")); }); }
-    if (P.periods.some((x) => x.flowHeavy) || windowsOf(A).some((x) => x.estimated)) s.append(h("p", { class: "note" }, "* The account was nearly empty on 1/1 and was funded during this period, so its return is a cash-flow-weighted estimate (Modified Dietz) rather than a statement-to-statement figure. Uploading the January–March month-end values (Upload page → Add a statement value) splits it into exact months."));
+    if (P.periods.some((x) => x.flowHeavy) || windowsOf(A).some((x) => x.estimated)) s.append(h("p", { class: "note" }, "* The $1.51M wire on 3/2 landed in the first period (inception to 4/30), so that return is a cash-flow-weighted estimate (Modified Dietz), not statement-to-statement" + (A.inception && A.inception.estimated ? ", and it starts from an estimated 2/28 value" : "") + ". Adding the 3/31 statement value (and the 2/28 value, if missing) on the Upload page makes it exact."));
 
     s.append(section("Where the gain came from"));
     const { box: b2, canvas: c2 } = chartBox(220);
@@ -225,7 +240,7 @@
     const s = sheet("Gains & losses", "Dollar results: what you made, how much is realized and what's still open in current positions.");
     s.append(periodBar(A, "perf", rerender));
     s.append(kpis([
-      { label: `Gain, ${P.label}`, value: usd(P.totalGain), sub: `${fmtDate(P.start)} – ${fmtDate(P.end)}`, lead: true },
+      { label: `Gain, ${P.label}`, value: usd(P.totalGain), sub: `${fmtDate(addDaysIso(P.start, 1))} – ${fmtDate(P.end)}`, lead: true },
       { label: "Realized (net)", value: usd(R.net), sub: `${usd(R.gains)} gains, ${usd(R.losses)} losses` },
       { label: "Change in unrealized", value: usd(P.unrealized), sub: pos ? `open gain today ${usd(sum(pos.holdings, (x) => x.gain))}` : "" },
       { label: "Income received", value: usd(P.income), sub: "distributions and interest" },
@@ -290,7 +305,7 @@
       });
     }
 
-    s.append(section(`Realized gains and losses by fund, ${P.label}`, R.count ? `${R.count} lots closed ${fmtDate(P.start)} – ${fmtDate(P.end)}, including funds since sold.` : "No sales closed in this period."));
+    s.append(section(`Realized gains and losses by fund, ${P.label}`, R.count ? `${R.count} lots closed ${fmtDate(addDaysIso(P.start, 1))} – ${fmtDate(P.end)}, including funds since sold.` : "No sales closed in this period."));
     if (R.count) s.append(table([
       { label: "Fund", get: (r) => h("span", {}, h("strong", {}, r.symbol), " ", h("span", { class: "muted" }, r.name)) },
       { label: "Lots", num: 1, get: (r) => r.lots },
@@ -320,12 +335,12 @@
     const s = sheet("Income", "Distributions and interest received, by month and by tax character as Schwab reports it today. Final character comes on the 1099.");
     s.append(periodBar(A, "cash", rerender));
     s.append(kpis([
-      { label: `Income, ${w.label}`, value: usd(total), sub: `${fmtDate(from)} – ${fmtDate(to)}`, lead: true },
+      { label: `Income, ${w.label}`, value: usd(total), sub: `${fmtDate(addDaysIso(from, 1))} – ${fmtDate(to)}`, lead: true },
       { label: "Margin interest paid", value: usd(interestPaid) },
       { label: "Income after margin interest", value: usd(total + interestPaid) },
       { label: "Monthly average", value: usd(total / monthsSpan), sub: `over ${monthsSpan < 1.5 ? "the period" : Math.round(monthsSpan) + " months"}` },
     ]));
-    if (w.key === "ITD" || w.key === "1Y") s.append(h("p", { class: "note" }, `Income history comes from the transaction file, which starts ${fmtDate(A.income.firstDate)}, before the strip was funded in March 2026.`));
+    if (w.clamped || w.key === "ITD") s.append(h("p", { class: "note" }, `Shown from inception (${fmtDate(A.inception && A.inception.date)}). The Tax tab covers the full calendar year, including January and February.`));
     const palette = [C.green, C.navy, C.gold, C.haze, C.bronze, C.grey, C.sky];
     const { box, canvas } = chartBox(300);
     s.append(section("Income by month"), box);
@@ -368,7 +383,7 @@
     months.forEach((m) => Object.entries(m).forEach(([k, v]) => { if (k !== "month" && k !== "total") inc[k] = (inc[k] || 0) + v; }));
     const interestPaid = -sum(A.income.interestByMonth.filter((m) => m.month.startsWith(year)), (m) => m.interest);
 
-    const s = sheet(`Tax picture, ${year}`, `Realized results through ${fmtDate(R.to)} and income received so far. An estimate to review with Jason, not tax advice; final character comes from the ${year} 1099.`);
+    const s = sheet(`Tax picture, calendar ${year}`, `Full tax year: realized results ${fmtDate(R.from || year + "-01-01")} through ${fmtDate(R.to)} and all income received in ${year}, including the months before the ${fmtDate(A.inception && A.inception.date)} performance inception. An estimate to review with Jason, not tax advice; final character comes from the ${year} 1099.`);
     s.append(kpis([
       { label: "Net realized", value: usd(R.net), sub: `${usd(R.st)} short-term, ${usd(R.lt)} long-term`, lead: true },
       { label: "Realized gains", value: usd(R.gains) },
@@ -376,6 +391,30 @@
       { label: "Wash-sale losses deferred", value: usd(R.disallowed), sub: `${R.washLots} lots; added to replacement shares' basis` },
       { label: "Margin interest paid", value: usd(interestPaid), sub: "investment interest expense" },
     ]));
+
+    // Before vs since inception, so the tax year ties to the performance window
+    const inc0 = (A.inception && A.inception.date) || `${year}-01-01`;
+    const yItems = A.income.items.filter((x) => x.d.startsWith(year));
+    const split = (pred) => {
+      const it = yItems.filter((x) => pred(x.d));
+      const lots = (R.detail || []).filter((l) => pred(l.c));
+      return { income: sum(it.filter((x) => x.k !== "Margin interest"), (x) => x.a), interest: sum(it.filter((x) => x.k === "Margin interest"), (x) => x.a),
+        st: sum(lots.filter((l) => l.t === "ST"), (l) => l.g), lt: sum(lots.filter((l) => l.t === "LT"), (l) => l.g), lots: lots.length };
+    };
+    if (inc0 > `${year}-01-01` && inc0.startsWith(year)) {
+      const pre = split((d) => d < inc0), post = split((d) => d >= inc0);
+      const tot = { income: pre.income + post.income, interest: pre.interest + post.interest, st: pre.st + post.st, lt: pre.lt + post.lt, lots: pre.lots + post.lots };
+      s.append(section(`Tax year ${year}, before and since inception`, `Performance starts ${fmtDate(inc0)}; taxes don't. Everything in ${year} counts.`));
+      const row = (label, x, cls) => ({ label, ...x, _class: cls });
+      s.append(table([
+        { label: "", get: (r) => r.label },
+        { label: "Income", num: 1, get: (r) => usd(r.income) },
+        { label: "Margin interest", num: 1, get: (r) => usd(r.interest), raw: (r) => r.interest },
+        { label: "Short-term realized", num: 1, get: (r) => usd(r.st), raw: (r) => r.st },
+        { label: "Long-term realized", num: 1, get: (r) => usd(r.lt), raw: (r) => r.lt },
+        { label: "Closed lots", num: 1, get: (r) => r.lots },
+      ], [row(`1/1 – ${fmtDate(addDaysIso(inc0, -1))} (before inception)`, pre), row(`${fmtDate(inc0)} – ${fmtDate(R.to)} (since inception)`, post), row(`Calendar ${year}`, tot, "sum")]));
+    }
 
     s.append(section("Estimate", "Adjust the assumptions; everything below recalculates. Defaults are conservative: no return of capital until the 1099 says so."));
     const field = (id, label, value, step, hint) => h("label", { class: "tax-field" }, h("span", {}, label), h("input", { id, type: "number", step, value }), hint ? h("small", {}, hint) : null);
