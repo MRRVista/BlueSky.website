@@ -2,23 +2,78 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "cleanUrls": true,
   "rewrites": [
-    { "source": "/home", "destination": "/api/page?p=home" },
-    { "source": "/account", "destination": "/api/page?p=account" },
-    { "source": "/upload", "destination": "/api/page?p=upload" },
-    { "source": "/logo.webp", "destination": "/api/asset?f=logo" },
-    { "source": "/favicon.png", "destination": "/api/asset?f=favicon" },
-    { "source": "/favicon.ico", "destination": "/api/asset?f=favicon" }
+    {
+      "source": "/home",
+      "destination": "/api/page?p=home"
+    },
+    {
+      "source": "/account",
+      "destination": "/api/page?p=account"
+    },
+    {
+      "source": "/upload",
+      "destination": "/api/page?p=upload"
+    },
+    {
+      "source": "/logo.webp",
+      "destination": "/api/asset?f=logo"
+    },
+    {
+      "source": "/favicon.png",
+      "destination": "/api/asset?f=favicon"
+    },
+    {
+      "source": "/favicon.ico",
+      "destination": "/api/asset?f=favicon"
+    },
+    {
+      "source": "/api/loans",
+      "destination": "/api/work?r=loans"
+    },
+    {
+      "source": "/api/notes",
+      "destination": "/api/work?r=notes"
+    },
+    {
+      "source": "/api/docs",
+      "destination": "/api/work?r=docs"
+    },
+    {
+      "source": "/api/fedfunds",
+      "destination": "/api/work?r=fedfunds"
+    }
   ],
   "headers": [
     {
       "source": "/(.*)",
       "headers": [
-        { "key": "X-Frame-Options", "value": "DENY" },
-        { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
-        { "key": "Strict-Transport-Security", "value": "max-age=63072000; includeSubDomains; preload" },
-        { "key": "X-Robots-Tag", "value": "noindex, nofollow" }
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        },
+        {
+          "key": "Strict-Transport-Security",
+          "value": "max-age=63072000; includeSubDomains; preload"
+        },
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex, nofollow"
+        }
       ]
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/work?r=fedfunds",
+      "schedule": "0 13 * * *"
     }
   ]
 }

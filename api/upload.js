@@ -1,22 +1,22 @@
 import { getSession, readJson as readBody, sameOrigin } from "../lib/auth.js";
 import { readJson, writeJson, PORTFOLIO_PATH } from "../lib/store.js";
+import { put } from "@vercel/blob";
 import { detectType, parseTransactions, parseRealized, parsePositions, parseIncome, parseBalances } from "../lib/schwab.js";
+import { readDocs, newId, safeName, DOCS_PATH } from "../lib/docs.js";
 
 export const config = { api: { bodyParser: { sizeLimit: "4mb" } } };
 
-const txKey = (x) => [x.date, x.action, x.symbol, x.quantity, x.price, x.fees, x.amount, x.description].join("|");
-
-// Merge transaction exports that overlap: for each identical row, keep the larger of the two counts.
-function mergeTransactions(oldTx, newTx) {
-  const count = (list) => list.reduce((m, x) => m.set(txKey(x), (m.get(txKey(x)) || 0) + 1), new Map());
-  const oldC = count(oldTx), newC = count(newTx);
-  const out = [...oldTx];
-  for (const [k, n] of newC) {
-    const extra = n - (oldC.get(k) || 0);
-    if (extra > 0) out.push(...newTx.filter((x) => txKey(x) === k).slice(0, extra));
-  }
-  return out.sort((a, b) => b.date.localeCompare(a.date));
+// A new Transactions export replaces every stored row in the date range it covers.
+// Rows outside that range (older history) are kept, so a year-to-date export never erases prior years.
+function replaceTransactions(oldTx, newTx) {
+  if (!newTx.length) return { list: oldTx, from: null, to: null, removed: 0 };
+  const dates = newTx.map((x) => x.date).sort();
+  const from = dates[0], to = dates[dates.length - 1];
+  const kept = oldTx.filter((x) => x.date < from || x.date > to);
+  return { list: kept.concat(newTx).sort((a, b) => b.date.localeCompare(a.date)), from, to, removed: oldTx.length - kept.length };
 }
+
+const TYPE_LABEL = { transactions: "Transactions", positions: "Positions", realized: "Realized Gain/Loss", income: "Investment Income", balances: "Balances" };
 
 function upsertValuation(p, v) {
   const existing = p.valuations.find((x) => x.date === v.date);
@@ -40,6 +40,7 @@ export default async function handler(req, res) {
 
   const body = await readBody(req);
   const results = [];
+  const archived = [];
   const now = new Date().toISOString();
 
   for (const f of Array.isArray(body.files) ? body.files : []) {
@@ -49,9 +50,9 @@ export default async function handler(req, res) {
     try {
       if (type === "transactions") {
         const tx = parseTransactions(text);
-        const before = p.transactions.length;
-        p.transactions = mergeTransactions(p.transactions, tx);
-        results.push({ name, type, ok: true, message: `${tx.length} rows read; ${p.transactions.length - before} new transactions added.` });
+        const r = replaceTransactions(p.transactions, tx);
+        p.transactions = r.list;
+        results.push({ name, type, ok: true, message: r.from ? `${tx.length} transactions from ${r.from} to ${r.to} now replace the ${r.removed} stored for those dates. Earlier history is kept (${p.transactions.length} in total).` : "No transaction rows found in this file." });
       } else if (type === "realized") {
         const r = parseRealized(text);
         p.realized[r.year] = r;
@@ -80,6 +81,7 @@ export default async function handler(req, res) {
         continue;
       }
       p.files.push({ name, type, uploadedAt: now, by: session.email });
+      archived.push({ name, type, text });
     } catch (err) {
       console.error("upload parse failed", name, err);
       results.push({ name, type, ok: false, message: "The file couldn't be read. Export it again from Schwab as CSV and retry." });
@@ -98,6 +100,24 @@ export default async function handler(req, res) {
     const d = String(body.removeValuation);
     p.valuations = p.valuations.filter((x) => x.date !== d);
     results.push({ name: "Valuation", type: "valuation", ok: true, message: `Valuation for ${d} removed.` });
+  }
+
+  // Keep every original export permanently in the document repository ("Schwab exports").
+  if (archived.length) {
+    try {
+      const idx = await readDocs();
+      for (const a of archived) {
+        const id = newId();
+        const pathname = `docs/${id}/${safeName(a.name)}`;
+        const blob = await put(pathname, a.text, { access: "private", addRandomSuffix: false, contentType: "text/csv" });
+        idx.docs.push({ id, pathname, filename: a.name, label: `${TYPE_LABEL[a.type] || "Schwab"} export, ${now.slice(0, 10)}`, category: "Schwab exports",
+          docDate: now.slice(0, 10), notes: "Saved automatically when uploaded.", size: Buffer.byteLength(a.text), contentType: blob.contentType || "text/csv", uploadedBy: session.email, uploadedAt: now, system: true });
+      }
+      await writeJson(DOCS_PATH, idx);
+    } catch (err) {
+      console.error("archive failed", err);
+      results.push({ name: "Archive", type: null, ok: false, message: "The data was saved, but the original files couldn't be archived to Documents." });
+    }
   }
 
   try {
