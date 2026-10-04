@@ -73,36 +73,152 @@
 
   /* ---------- reporting windows ---------- */
   let winKey = (() => { try { return sessionStorage.getItem("bs-win") || "YTD"; } catch { return "YTD"; } })();
+  let custom = (() => { try { return JSON.parse(sessionStorage.getItem("bs-custom") || "null"); } catch { return null; } })();
   const windowsOf = (A) => A.performance.windows || [];
+  const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const monthEnd = (ym) => { const [y, m] = ym.split("-").map(Number); return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); };
+  const prevMonthEnd = (ym) => addDaysIso(ym + "-01", -1);
+  const dayDiff = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 864e5);
+
+  // Account value at every valuation point (index matches performance.series).
+  function valuePoints(A) {
+    const P = A.performance;
+    return P.series.map((x, k) => ({ date: x.date, value: k === 0 ? (P.periods[0] ? P.periods[0].begin : P.beginValue) : P.periods[k - 1].end_value }));
+  }
+  function nearestIdx(pts, d, tol) {
+    let best = -1, bd = Infinity;
+    pts.forEach((p, i) => { const dd = Math.abs(dayDiff(p.date, d)); if (dd < bd) { bd = dd; best = i; } });
+    return bd <= tol ? best : -1;
+  }
+  function xirr(cf) {
+    if (cf.length < 2) return null;
+    const t0 = Date.parse(cf[0].date), yrs = cf.map((c) => (Date.parse(c.date) - t0) / (365 * 864e5));
+    const npv = (r) => cf.reduce((a, c, i) => a + c.amount / Math.pow(1 + r, yrs[i]), 0);
+    let lo = -0.9999, hi = 10, flo = npv(lo);
+    if (flo * npv(hi) > 0) return null;
+    for (let i = 0; i < 200; i++) { const mid = (lo + hi) / 2, fm = npv(mid); if (Math.abs(fm) < 1e-6) return mid; if (flo * fm < 0) hi = mid; else { lo = mid; flo = fm; } }
+    return (lo + hi) / 2;
+  }
+
+  // A window between two dates. Performance needs account values at both ends (month-end statements);
+  // cash views (income) use the exact dates. `snap` (custom ranges) moves to the nearest statement dates.
+  function rangeWindow(A, def) {
+    const P = A.performance, pts = valuePoints(A), I = A.inception || {};
+    const anchor = pts[0].date, last = pts[pts.length - 1].date;
+    const w = { key: def.key, label: def.label, chip: def.chip, group: def.group, start: def.start, end: def.end };
+    w.cashStart = def.start < anchor ? anchor : def.start;
+    w.cashEnd = def.end;
+    w.cashAvailable = def.end > anchor && w.cashStart < def.end && !!A.income.firstDate;
+    if (!w.cashAvailable) w.cashReason = `Before inception (${fmtDate(I.date)}).`;
+    else if (def.start < anchor) w.cashNote = `Starts at inception, ${fmtDate(I.date)}.`;
+    let a, b;
+    if (def.snap) {
+      a = nearestIdx(pts, def.start < anchor ? anchor : def.start, 1e6);
+      b = nearestIdx(pts, def.end > last ? last : def.end, 1e6);
+    } else {
+      if (def.start < addDaysIso(anchor, -3)) { w.available = false; w.reason = `Before inception (${fmtDate(I.date)}).`; return w; }
+      a = nearestIdx(pts, def.start, 3);
+      b = def.end >= last ? pts.length - 1 : nearestIdx(pts, def.end, 3);
+      if (a < 0) { w.available = false; w.reason = `Needs the ${fmtDate(def.start)} statement value. Add it on the Upload page.`; return w; }
+      if (b < 0) { w.available = false; w.reason = `Needs the ${fmtDate(def.end)} statement value. Add it on the Upload page.`; return w; }
+    }
+    if (b <= a) { w.available = false; w.reason = "Pick a range that spans at least one statement period."; return w; }
+    const ps = P.periods.slice(a, b);
+    const net = sum(ps, (x) => x.netFlow), D = dayDiff(pts[a].date, pts[b].date);
+    const twr = ps.reduce((g, x) => g * (1 + (x.ret || 0)), 1) - 1;
+    const fl = (P.flows || []).filter((f) => f.d > pts[a].date && f.d <= pts[b].date);
+    const irr = xirr([{ date: pts[a].date, amount: -pts[a].value }].concat(fl.map((f) => ({ date: f.d, amount: -f.a }))).concat([{ date: pts[b].date, amount: pts[b].value }]));
+    Object.assign(w, {
+      available: true, start: pts[a].date, end: pts[b].date, startIndex: a, endIndex: b, days: D,
+      begin: pts[a].value, endValue: pts[b].value, netFlow: net, gain: pts[b].value - pts[a].value - net,
+      income: sum(ps, (x) => x.income), interest: sum(ps, (x) => x.interest), realized: sum(ps, (x) => x.realized), unrealized: sum(ps, (x) => x.unrealized),
+      twr, twrAnnualized: D >= 365 ? Math.pow(1 + twr, 365 / D) - 1 : null,
+      mwrAnnualized: irr, mwr: irr == null ? null : D >= 365 ? irr : Math.pow(1 + irr, D / 365) - 1,
+      estimated: ps.some((x) => x.flowHeavy) || (a === 0 && !!I.estimated),
+    });
+    if (def.snap && (pts[a].date !== def.start || pts[b].date !== def.end)) w.snapNote = `Returns run ${fmtDate(addDaysIso(pts[a].date, 1))} – ${fmtDate(pts[b].date)}, the nearest statement dates to ${fmtDate(custom.from)} – ${fmtDate(custom.to)}. The Income tab uses your exact dates.`;
+    return w;
+  }
+
+  // Standard windows + past calendar years + each of the last 12 months + custom range.
+  function allWindows(A) {
+    const out = windowsOf(A).slice();
+    const last = A.performance.end;
+    if (!last) return out;
+    const curY = +last.slice(0, 4);
+    const firstY = +((A.income.firstDate || last).slice(0, 4));
+    for (let y = firstY; y < curY; y++) out.push(rangeWindow(A, { key: `Y${y}`, label: String(y), chip: String(y), group: "year", start: `${y - 1}-12-31`, end: `${y}-12-31` }));
+    const [ly, lm] = last.slice(0, 7).split("-").map(Number);
+    for (let k = 11; k >= 0; k--) {
+      const d = new Date(Date.UTC(ly, lm - 1 - k, 1));
+      const ym = d.toISOString().slice(0, 7), mi = d.getUTCMonth(), yy = d.getUTCFullYear();
+      const isCur = k === 0;
+      out.push(rangeWindow(A, { key: `M${ym}`, label: `${MON[mi]} ${yy}${isCur ? " to date" : ""}`, chip: `${MON[mi]} '${String(yy).slice(2)}`, group: "month",
+        start: prevMonthEnd(ym), end: isCur ? last : monthEnd(ym) }));
+    }
+    if (custom && custom.from && custom.to) out.push(rangeWindow(A, { key: "CUSTOM", label: "Custom range", chip: "Custom", group: "custom", start: addDaysIso(custom.from, -1), end: custom.to, snap: true }));
+    return out;
+  }
   function pickWindow(A, mode) {
-    const ws = windowsOf(A);
+    const ws = allWindows(A);
     const ok = (w) => (mode === "cash" ? w.cashAvailable : w.available);
     return ws.find((w) => w.key === winKey && ok(w)) || ws.find((w) => w.key === "YTD" && ok(w)) || ws.find(ok);
   }
   function periodBar(A, mode, rerender) {
     const current = pickWindow(A, mode);
-    const bar = h("div", { class: "periodbar", role: "group", "aria-label": "Reporting period" });
-    windowsOf(A).forEach((w) => {
-      const ok = mode === "cash" ? w.cashAvailable : w.available;
-      const reason = isoToUs(mode === "cash" ? (w.cashReason || `Transaction history starts ${A.income.firstDate}.`) : w.reason);
-      const b = h("button", { type: "button", class: "pb" + (current && w.key === current.key ? " on" : ""), "aria-pressed": current && w.key === current.key ? "true" : "false", disabled: !ok, title: ok ? null : reason }, w.label);
-      b.addEventListener("click", () => { winKey = w.key; try { sessionStorage.setItem("bs-win", w.key); } catch {} rerender(); });
-      bar.append(b);
+    const all = allWindows(A);
+    const ok = (w) => (mode === "cash" ? w.cashAvailable : w.available);
+    const reasonOf = (w) => isoToUs(mode === "cash" ? (w.cashReason || `Transaction history starts ${A.income.firstDate}.`) : w.reason);
+    const choose = (key) => { winKey = key; try { sessionStorage.setItem("bs-win", key); } catch {} rerender(); };
+    const chip = (w) => {
+      const on = current && w.key === current.key;
+      const b = h("button", { type: "button", class: "pb" + (on ? " on" : ""), "aria-pressed": on ? "true" : "false", disabled: !ok(w), title: ok(w) ? w.label : reasonOf(w) }, w.chip || w.label);
+      b.addEventListener("click", () => choose(w.key));
+      return b;
+    };
+    const row = (label, ws) => h("div", { class: "periodbar", role: "group", "aria-label": label || "Reporting period" }, label ? h("span", { class: "pb-label" }, label) : null, ws.map(chip));
+    const wrap = h("div", { class: "periodpick" });
+    wrap.append(row(null, all.filter((w) => !w.group)));
+    const years = all.filter((w) => w.group === "year");
+    if (years.length) wrap.append(row("Calendar year", years));
+    wrap.append(row("Month", all.filter((w) => w.group === "month")));
+
+    // custom range
+    const I = A.inception || {};
+    const minD = I.date || A.performance.start, maxD = A.performance.end;
+    const f = h("input", { type: "date", value: (custom && custom.from) || minD, min: minD, max: maxD, "aria-label": "Custom range start" });
+    const t = h("input", { type: "date", value: (custom && custom.to) || maxD, min: minD, max: maxD, "aria-label": "Custom range end" });
+    const go = h("button", { type: "button", class: "pb" + (current && current.key === "CUSTOM" ? " on" : "") }, "Apply");
+    const cmsg = h("span", { class: "pb-range", role: "status" });
+    go.addEventListener("click", () => {
+      if (!f.value || !t.value) { cmsg.textContent = "Pick both dates."; return; }
+      if (f.value > t.value) { cmsg.textContent = "The start date is after the end date."; return; }
+      custom = { from: f.value, to: t.value };
+      try { sessionStorage.setItem("bs-custom", JSON.stringify(custom)); } catch {}
+      choose("CUSTOM");
     });
+    wrap.append(h("div", { class: "periodbar", role: "group", "aria-label": "Custom range" }, h("span", { class: "pb-label" }, "Custom"),
+      h("label", { class: "pb-date" }, h("span", {}, "From"), f), h("label", { class: "pb-date" }, h("span", {}, "To"), t), go, cmsg));
+
     if (current) {
-      const from = mode === "cash" ? current.cashStart : current.start;
-      bar.append(h("span", { class: "pb-range" }, `${fmtDate(addDaysIso(from, 1))} – ${fmtDate(current.end)}`));
+      const from = mode === "cash" ? current.cashStart : current.start, to = mode === "cash" ? (current.cashEnd || current.end) : current.end;
+      const line = h("p", { class: "pb-showing" }, h("strong", {}, current.label), ` · ${fmtDate(addDaysIso(from, 1))} – ${fmtDate(to)}`);
+      const wanted = all.find((w) => w.key === winKey);
+      if (wanted && wanted.key !== current.key) line.append(h("span", { class: "muted" }, ` · ${wanted.label} isn't available on this tab (${reasonOf(wanted)}), so ${current.label} is shown.`));
+      const note = mode === "cash" ? current.cashNote : current.snapNote;
+      if (note) line.append(h("span", { class: "muted" }, " · " + note));
+      wrap.append(line);
     }
-    return bar;
+    return wrap;
   }
   // Performance and gain figures for one window.
   function perfView(A, w) {
-    const P = A.performance, si = w.startIndex;
+    const P = A.performance, si = w.startIndex, ei = w.endIndex ?? P.series.length - 1;
     const base = P.series[si].growth;
     return { ...P, start: w.start, end: w.end, days: w.days, beginValue: w.begin, endValue: w.endValue, netContributions: w.netFlow,
       totalGain: w.gain, twr: w.twr, twrAnnualized: w.twrAnnualized, mwr: w.mwr, mwrAnnualized: w.mwrAnnualized,
       income: w.income, interest: w.interest, realized: w.realized, unrealized: w.unrealized, marketChange: w.gain - w.income - w.interest,
-      periods: P.periods.slice(si), series: P.series.slice(si).map((x) => ({ date: x.date, growth: x.growth / base })), estimated: w.estimated, label: w.label };
+      periods: P.periods.slice(si, ei), series: P.series.slice(si, ei + 1).map((x) => ({ date: x.date, growth: x.growth / base })), estimated: w.estimated, label: w.label };
   }
   // Realized lots closed inside the window, grouped like the server's yearly summary.
   function realizedView(A, start, end) {
@@ -288,14 +404,14 @@
       if (!m.connected) { bnote.textContent = "The benchmark appears once the EODHD token (EODHD_API_TOKEN) is added to this site's Vercel project."; return; }
       if (m.error || !m.series) { bnote.textContent = "Benchmark prices are unavailable right now."; return; }
       const full = blendGrowth(A, cfg, m);
-      const si = w.startIndex, base = full[si];
-      const win = full.slice(si).map((g) => (g == null || base == null ? null : g / base));
+      const si = w.startIndex, ei = w.endIndex ?? full.length - 1, base = full[si];
+      const win = full.slice(si, ei + 1).map((g) => (g == null || base == null ? null : g / base));
       if (chart) {
         chart.data.datasets.push({ label: `Benchmark: ${bmLabel(A, cfg)}`, data: win, borderColor: C.navy, backgroundColor: C.navy, borderWidth: 2.5, borderDash: [6, 4], tension: 0.2, pointRadius: 2 });
         if (cfg.components.length > 1) cfg.components.forEach((c, i) => {
           const ser = m.series[`${c.symbol}.US`];
           if (!ser || ser[si] == null) return;
-          chart.data.datasets.push({ label: `${c.symbol} alone`, data: ser.slice(si).map((v) => (v == null ? null : v / ser[si])), borderColor: [C.haze, C.grey, C.sky, C.bronze, C.green, C.red][i % 6], borderWidth: 1, tension: 0.2, pointRadius: 0, hidden: true });
+          chart.data.datasets.push({ label: `${c.symbol} alone`, data: ser.slice(si, ei + 1).map((v) => (v == null ? null : v / ser[si])), borderColor: [C.haze, C.grey, C.sky, C.bronze, C.green, C.red][i % 6], borderWidth: 1, tension: 0.2, pointRadius: 0, hidden: true });
         });
         chart.update();
       }
@@ -310,7 +426,7 @@
       bnote.textContent = `Benchmark: ${bmLabel(A, cfg)}${cfg.leverage && cfg.leverage !== 1 ? `, borrowing at ${cfg.borrowRate}%` : ""}. Single indices are in the legend; click one to show it.${P.estimated ? " The account's first period is an estimate (see note below)." : ""}`;
 
       const rows = windowsOf(A).filter((x) => x.available).map((x) => {
-        const b0 = full[x.startIndex], b1 = full[full.length - 1];
+        const b0 = full[x.startIndex], b1 = full[x.endIndex ?? full.length - 1];
         const br = b0 == null || b1 == null ? null : b1 / b0 - 1;
         return { ...x, br, ex: br == null ? null : x.twr - br, _class: x.key === w.key ? "sum" : null };
       });
@@ -322,6 +438,79 @@
         { label: "Difference", num: 1, get: (r) => (r.ex == null ? "—" : (r.ex >= 0 ? "+" : "") + pct(r.ex)), raw: (r) => r.ex },
       ], rows));
     });
+  }
+
+  /* ---------- calendar-month gains (Gains & Losses chart and popout) ---------- */
+  // Each statement period is split into the calendar months it covers. Income, margin interest and
+  // realized results are dated, so they split exactly; unrealized change and total gain only exist
+  // per statement period, so a period spanning several months is reported as one combined group.
+  function monthlyGains(A, from, to) {
+    const P = A.performance;
+    const items = A.income.items;
+    const lots = Object.values(A.realized).flatMap((r) => r.detail);
+    const months = [], groups = [];
+    P.periods.filter((p) => p.start >= from && p.end <= to).forEach((p) => {
+      const first = addDaysIso(p.start, 1).slice(0, 7), lastM = p.end.slice(0, 7);
+      const ms = [];
+      for (let m = first; m <= lastM; m = addDaysIso(monthEnd(m), 1).slice(0, 7)) ms.push(m);
+      let group = null;
+      if (ms.length > 1) {
+        group = { label: `${MON[+ms[0].slice(5) - 1]}–${MON[+lastM.slice(5) - 1]} ${lastM.slice(0, 4)}`, start: p.start, end: p.end, begin: p.begin, endValue: p.end_value, netFlow: p.netFlow,
+          income: p.income, interest: p.interest, realized: p.realized, unrealized: p.unrealized, gain: p.gain, ret: p.ret, estimated: p.flowHeavy,
+          missing: ms.slice(0, -1).map(monthEnd) };
+        groups.push(group);
+      }
+      ms.forEach((m, i) => {
+        const lo = i === 0 ? p.start : prevMonthEnd(m), hi = i === ms.length - 1 ? p.end : monthEnd(m);
+        const inR = (d) => d > lo && d <= hi;
+        const it = items.filter((x) => inR(x.d));
+        const income = sum(it.filter((x) => x.k !== "Margin interest"), (x) => x.a), interest = sum(it.filter((x) => x.k === "Margin interest"), (x) => x.a);
+        const realized = sum(lots.filter((l) => inR(l.c)), (l) => l.g);
+        const partial = hi !== monthEnd(m);
+        const mi = +m.slice(5) - 1, yy = m.slice(0, 4);
+        const row = { month: m, label: `${MON[mi]} ${yy}${partial ? ` (to ${fmtDate(hi)})` : ""}`, short: `${MON[mi]} '${yy.slice(2)}${partial ? "*" : ""}`, lo, hi, income, interest, realized, group, groupLast: group && i === ms.length - 1 };
+        if (!group) Object.assign(row, { begin: p.begin, endValue: p.end_value, netFlow: p.netFlow, unrealized: p.unrealized, gain: p.gain, ret: p.ret, estimated: p.flowHeavy });
+        months.push(row);
+      });
+    });
+    return { months, groups };
+  }
+  function monthlyDialog(MG, P) {
+    const dlg = h("dialog", { class: "bs-dialog", "aria-labelledby": "mg-title" });
+    const close = h("button", { type: "button", class: "link-button dark", "aria-label": "Close" }, "Close");
+    close.addEventListener("click", () => dlg.close());
+    dlg.addEventListener("close", () => dlg.remove());
+    dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); });
+    const rows = [];
+    MG.months.forEach((m) => {
+      rows.push(m);
+      if (m.groupLast) rows.push({ ...m.group, label: `${m.group.label} combined`, _class: "sum", isGroup: true });
+    });
+    const dash = (r, v) => (r.group && !r.isGroup ? h("span", { class: "muted" }, "combined") : v);
+    const gainSum = sum(MG.months.filter((m) => !m.group), (m) => m.gain) + sum(MG.groups, (g) => g.gain);
+    const tot = { income: sum(MG.months, (m) => m.income), interest: sum(MG.months, (m) => m.interest), realized: sum(MG.months, (m) => m.realized),
+      unrealized: sum(MG.months.filter((m) => !m.group), (m) => m.unrealized) + sum(MG.groups, (g) => g.unrealized), net: sum(MG.months.filter((m) => !m.group), (m) => m.netFlow) + sum(MG.groups, (g) => g.netFlow) };
+    const body = h("div", { class: "bs-dialog-body" },
+      h("div", { class: "bs-dialog-head" }, h("h3", { id: "mg-title" }, `Gain and loss by month, ${P.label}`), close),
+      table([
+        { label: "Month", get: (r) => (r.isGroup ? h("strong", {}, r.label) : r.label) },
+        { label: "Begin value", num: 1, get: (r) => dash(r, usd(r.begin)) },
+        { label: "Net deposits", num: 1, get: (r) => dash(r, usd(r.netFlow)), raw: (r) => (r.group && !r.isGroup ? null : r.netFlow) },
+        { label: "Income", num: 1, get: (r) => usd(r.income) },
+        { label: "Margin interest", num: 1, get: (r) => usd(r.interest), raw: (r) => r.interest },
+        { label: "Realized", num: 1, get: (r) => usd(r.realized), raw: (r) => r.realized },
+        { label: "Unrealized", num: 1, get: (r) => dash(r, usd(r.unrealized)), raw: (r) => (r.group && !r.isGroup ? null : r.unrealized) },
+        { label: "Total gain / loss", num: 1, get: (r) => dash(r, h("strong", {}, usd(r.gain))), raw: (r) => (r.group && !r.isGroup ? null : r.gain) },
+        { label: "Return", num: 1, get: (r) => dash(r, pct(r.ret) + (r.estimated ? " *" : "")), raw: (r) => (r.group && !r.isGroup ? null : r.ret) },
+      ], rows, { foot: {} }));
+    dlg.append(body);
+    const foot = body.querySelector("tfoot tr");
+    if (foot) ["Total", "", usd(tot.net), usd(tot.income), usd(tot.interest), usd(tot.realized), usd(tot.unrealized), usd(gainSum), pct(P.twr)].forEach((v, i) => { foot.children[i].textContent = v; foot.children[i].classList.toggle("neg", String(v).startsWith("−")); });
+    if (MG.groups.length) body.append(h("p", { class: "note" }, `Months marked "combined" share one statement period because the ${MG.groups.map((g) => g.missing.map(fmtDate).join(", ")).join(", ")} account value isn't on file. Their income, margin interest and realized figures are exact; the unrealized change and total are shown on the combined row. Enter the statement value on the Upload page to split them.`));
+    if (MG.months.some((m) => m.estimated || (m.group && m.group.estimated))) body.append(h("p", { class: "note" }, "* The 3/2 wire landed inside this period, so the return is a cash-flow-weighted estimate."));
+    if (MG.months.some((m) => m.hi !== monthEnd(m.month))) body.append(h("p", { class: "note" }, "Months marked with a date run only to the latest account value."));
+    document.body.append(dlg);
+    dlg.showModal();
   }
 
   /* ================= PERFORMANCE ================= */
@@ -410,20 +599,33 @@
       { label: "Margin interest", value: usd(P.interest), sub: "paid on the loan" },
     ]));
 
-    s.append(section("Monthly gain, by source"));
-    const { box, canvas } = chartBox(300);
+    const MG = monthlyGains(A, w.start, w.end);
+    const mgSec = section("Monthly gain, by source", "Calendar months. Income, margin interest and realized results are exact by date. The change in unrealized gains needs an account value at each month-end.");
+    const openBtn = h("button", { type: "button", class: "btn-small" }, "Month-by-month totals");
+    mgSec.append(h("div", { class: "toolbar" }, openBtn, h("span", { class: "note inline" }, "Or click any bar.")));
+    s.append(mgSec);
+    const { box, canvas } = chartBox(320);
     s.append(box);
-    const per = P.periods;
+    const showTotals = () => monthlyDialog(MG, P);
+    openBtn.addEventListener("click", showTotals);
+    const mrows = MG.months;
     draw(canvas, {
       type: "bar",
-      data: { labels: per.map((x) => fmtDate(x.end)), datasets: [
-        { label: "Income", data: per.map((x) => x.income), backgroundColor: C.green, stack: "g" },
-        { label: "Margin interest", data: per.map((x) => x.interest), backgroundColor: C.bronze, stack: "g" },
-        { label: "Realized", data: per.map((x) => x.realized), backgroundColor: C.red, stack: "g" },
-        { label: "Unrealized", data: per.map((x) => x.unrealized), backgroundColor: C.haze, stack: "g" },
+      data: { labels: mrows.map((m) => m.short), datasets: [
+        { label: "Income", data: mrows.map((m) => m.income), backgroundColor: C.green, stack: "g" },
+        { label: "Margin interest", data: mrows.map((m) => m.interest), backgroundColor: C.bronze, stack: "g" },
+        { label: "Realized", data: mrows.map((m) => m.realized), backgroundColor: C.red, stack: "g" },
+        { label: "Unrealized", data: mrows.map((m) => (m.group ? 0 : m.unrealized)), backgroundColor: C.haze, stack: "g" },
+        ...(MG.groups.length ? [{ label: "Unrealized, months combined", data: mrows.map((m) => (m.group && m.groupLast ? m.group.unrealized : 0)), backgroundColor: "#c9d8ec", borderColor: C.sky, borderWidth: 1, stack: "g" }] : []),
       ] },
-      options: { responsive: true, maintainAspectRatio: false, plugins: { tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${usd(c.raw)}`, footer: (items) => "Net: " + usd(sum(items, (i) => i.raw)) } } }, scales: { x: { stacked: true }, y: { stacked: true, ticks: { callback: moneyTick } } } },
+      options: { responsive: true, maintainAspectRatio: false, onClick: showTotals, interaction: { mode: "index", intersect: false },
+        plugins: { tooltip: { filter: (c) => !!c.raw, callbacks: {
+          label: (c) => `${c.dataset.label}: ${usd(c.raw)}`,
+          afterBody: (items) => { if (!items.length) return []; const m = mrows[items[0].dataIndex]; return m.group ? [`Unrealized for ${m.group.label} is combined: ${usd(m.group.unrealized)}`, `${m.group.label} total gain: ${usd(m.group.gain)}`] : [`Total gain: ${usd(m.gain)}`]; },
+        } } },
+        scales: { x: { stacked: true }, y: { stacked: true, ticks: { callback: moneyTick } } } },
     });
+    if (MG.groups.length) s.append(h("p", { class: "note" }, `${MG.groups.map((g) => g.label).join(", ")}: the unrealized change can't be split by month until the ${MG.groups.map((g) => g.missing.map(fmtDate).join(", ")).join(", ")} statement value is entered on the Upload page, so it's shown once, in the lighter bar.`));
 
     if (pos) {
       const sec = section("Current holdings", `From the ${fmtDate(pos.asOf)} positions export. Gross ${usd(pos.gross)}, margin ${usd(-pos.margin)}, net ${usd(pos.net)}.`);
@@ -486,7 +688,7 @@
     const rerender = () => renderIncome(root, A);
     const w = pickWindow(A, "cash");
     if (!w) return unavailable(root, "Income", A, "cash", rerender);
-    const from = w.cashStart, to = w.end;
+    const from = w.cashStart, to = w.cashEnd || w.end;
     const items = A.income.items.filter((x) => x.d > from && x.d <= to);
     const inc = items.filter((x) => x.k !== "Margin interest");
     const total = sum(inc, (x) => x.a), interestPaid = sum(items.filter((x) => x.k === "Margin interest"), (x) => x.a);
