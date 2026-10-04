@@ -115,3 +115,18 @@ details.lots summary { cursor: pointer; color: #183763; font-weight: 500; }
 .ws-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 0.75rem 1.25rem; margin: 0.9rem 0 0.25rem; }
 .ws-fact { font-size: 1.15rem; color: #0c1c36; font-variant-numeric: tabular-nums; }
 @media (max-width: 700px) { .ws-fed { grid-template-columns: 1fr; } .ws-field, .ws-foot { margin-left: 0; } }
+
+/* Benchmark proxy editor */
+.bm-details { margin: 0.5rem 0 0.25rem; }
+.bm-details summary { cursor: pointer; color: #183763; font-weight: 500; }
+.bm-editor { margin-top: 0.75rem; padding: 1rem; border: 1px solid #e3e9f2; border-radius: 8px; background: #fff; }
+.bm-rows { display: flex; flex-direction: column; gap: 0.5rem; }
+.bm-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
+.bm-row select { font: inherit; font-size: 0.9rem; color: #0c1c36; border: 1px solid #c9d4e3; border-radius: 4px; padding: 0.45rem 0.5rem; background: #fff; min-width: 16rem; max-width: 100%; }
+.bm-wt { display: inline-flex; align-items: center; gap: 0.25rem; margin: 0; color: #4a5b78; }
+.bm-wt input { width: 5rem; font: inherit; color: #0c1c36; border: 1px solid #c9d4e3; padding: 0.45rem 0.5rem; text-align: right; }
+.bm-row small { flex-basis: 100%; margin-top: -0.25rem; }
+.bm-total { font-size: 0.875rem; color: #1f6b3f; font-weight: 500; margin-left: 0.5rem; }
+.bm-total.bad { color: #b42318; }
+.bm-lev { margin-top: 1rem; }
+.btn-small.ghost { background: #fff; border: 1px solid #c9a262; }

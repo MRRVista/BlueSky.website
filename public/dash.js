@@ -136,6 +136,194 @@
     return p;
   }
 
+  /* ---------- benchmark proxy (blend of index ETFs, total return) ---------- */
+  let bmDraft = null; // unsaved edits in this browser session
+  const bmCache = {};
+  const bmCfg = (A) => bmDraft || A.benchmark.saved || A.benchmark.defaults;
+  const bmLabel = (A, cfg) => {
+    const name = (sy) => (A.benchmark.catalog.find((c) => c.symbol === sy) || { name: sy }).name;
+    const mix = cfg.components.map((c) => `${+c.weight}% ${name(c.symbol)}`).join(" / ");
+    return cfg.leverage && cfg.leverage !== 1 ? `${mix}, ${cfg.leverage}× levered` : mix;
+  };
+  function bmFetch(A, symbols) {
+    const dates = A.performance.series.map((x) => x.date).join(",");
+    const key = symbols.slice().sort().join(",") + "|" + dates;
+    if (!bmCache[key]) bmCache[key] = market({ kind: "benchmarks", dates, symbols: symbols.join(",") }).catch(() => ({ connected: true, error: 1 }));
+    return bmCache[key];
+  }
+  // Growth of $1 for the blend at each statement date across the whole inception series.
+  // Rebalanced to target weights at each statement date; leverage adds L× the blend return less (L−1)× borrowing cost.
+  function blendGrowth(A, cfg, m) {
+    const dates = A.performance.series.map((x) => x.date);
+    const L = Number(cfg.leverage) || 1, rate = (Number(cfg.borrowRate) || 0) / 100;
+    const g = [1];
+    for (let k = 1; k < dates.length; k++) {
+      if (g[k - 1] == null) { g.push(null); continue; }
+      let r = 0, ok = true;
+      for (const c of cfg.components) {
+        const ser = m.series[`${c.symbol}.US`];
+        if (!ser || ser[k] == null || ser[k - 1] == null) { ok = false; break; }
+        r += (c.weight / 100) * (ser[k] / ser[k - 1] - 1);
+      }
+      if (!ok) { g.push(null); continue; }
+      const dt = (Date.parse(dates[k]) - Date.parse(dates[k - 1])) / (365 * 864e5);
+      r = L * r - (L - 1) * rate * dt;
+      g.push(g[k - 1] * (1 + r));
+    }
+    return g;
+  }
+
+  function benchmarkEditor(A, onApply) {
+    const cat = A.benchmark.catalog, max = A.benchmark.max;
+    const cfg = JSON.parse(JSON.stringify(bmCfg(A)));
+    const box = h("div", { class: "bm-editor" });
+    const rowsEl = h("div", { class: "bm-rows" });
+    const totalEl = h("span", { class: "bm-total" });
+    const msg = h("span", { class: "note inline", role: "status", "aria-live": "polite" });
+    const groups = [...new Set(cat.map((c) => c.group))];
+    const options = (sel) => groups.map((g) => {
+      const og = h("optgroup", { label: g });
+      cat.filter((c) => c.group === g).forEach((c) => og.append(h("option", { value: c.symbol, selected: c.symbol === sel }, `${c.name} (${c.symbol})`)));
+      return og;
+    });
+    const total = () => cfg.components.reduce((a, c) => a + (Number(c.weight) || 0), 0);
+    const paintTotal = () => {
+      const t = Math.round(total() * 100) / 100;
+      totalEl.textContent = `Total ${t}%`;
+      totalEl.classList.toggle("bad", Math.abs(t - 100) > 0.01);
+    };
+    function paint() {
+      rowsEl.replaceChildren(...cfg.components.map((c, i) => {
+        const sel = h("select", { "aria-label": `Index ${i + 1}` }, options(c.symbol));
+        sel.addEventListener("change", () => { c.symbol = sel.value; });
+        const wt = h("input", { type: "number", min: "0", max: "100", step: "1", value: c.weight, "aria-label": `Weight for index ${i + 1}, percent` });
+        wt.addEventListener("input", () => { c.weight = Number(wt.value); paintTotal(); });
+        const rm = h("button", { type: "button", class: "link-button dark", "aria-label": `Remove index ${i + 1}`, disabled: cfg.components.length === 1 }, "Remove");
+        rm.addEventListener("click", () => { cfg.components.splice(i, 1); paint(); });
+        const proxy = (cat.find((x) => x.symbol === c.symbol) || {}).proxy;
+        return h("div", { class: "bm-row" }, sel, h("label", { class: "bm-wt" }, wt, h("span", {}, "%")), rm, proxy ? h("small", { class: "muted" }, `via ${proxy}`) : null);
+      }));
+      add.disabled = cfg.components.length >= max;
+      paintTotal();
+    }
+    const add = h("button", { type: "button", class: "link-button dark" }, "+ Add index");
+    add.addEventListener("click", () => {
+      const used = new Set(cfg.components.map((c) => c.symbol));
+      const next = cat.find((c) => !used.has(c.symbol));
+      if (next) { cfg.components.push({ symbol: next.symbol, weight: 0 }); paint(); }
+    });
+    const pos = A.positions;
+    const acctLev = pos && pos.net > 0 ? pos.gross / pos.net : null;
+    const lev = h("input", { type: "number", min: "0.5", max: "3", step: "0.05", value: cfg.leverage ?? 1 });
+    lev.addEventListener("input", () => { cfg.leverage = Number(lev.value); });
+    const rate = h("input", { type: "number", min: "0", max: "20", step: "0.05", value: cfg.borrowRate ?? 0 });
+    rate.addEventListener("input", () => { cfg.borrowRate = Number(rate.value); });
+    const levRow = h("div", { class: "tax-form bm-lev" },
+      h("label", { class: "tax-field" }, h("span", {}, "Leverage (1.0 = none)"), lev, h("small", {}, acctLev ? `The account runs about ${acctLev.toFixed(2)}× (gross ÷ net) as of ${fmtDate(pos.asOf)}.` : "")),
+      h("label", { class: "tax-field" }, h("span", {}, "Borrowing cost %"), rate, h("small", {}, "Charged on the levered portion only.")));
+    const valid = () => {
+      if (cfg.components.some((c) => !(Number(c.weight) >= 0))) return "Enter a weight for each index.";
+      if (new Set(cfg.components.map((c) => c.symbol)).size !== cfg.components.length) return "Each index can appear only once.";
+      if (Math.abs(total() - 100) > 0.01) return `Weights add up to ${Math.round(total() * 100) / 100}%; they need to total 100%.`;
+      if (!(cfg.leverage >= 0.5 && cfg.leverage <= 3)) return "Leverage must be between 0.5× and 3×.";
+      return null;
+    };
+    const apply = h("button", { type: "button", class: "btn-small" }, "Apply");
+    apply.addEventListener("click", () => {
+      const e = valid(); if (e) { msg.textContent = e; return; }
+      bmDraft = { ...cfg, components: cfg.components.filter((c) => c.weight > 0).map((c) => ({ ...c })) };
+      onApply();
+    });
+    const save = h("button", { type: "button", class: "btn-small ghost" }, "Save as default");
+    save.addEventListener("click", async () => {
+      const e = valid(); if (e) { msg.textContent = e; return; }
+      const clean = { ...cfg, components: cfg.components.filter((c) => c.weight > 0) };
+      save.disabled = true; msg.textContent = "Saving…";
+      try {
+        const r = await fetch("/api/upload", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ benchmark: clean }) });
+        const d = await r.json().catch(() => ({}));
+        if (r.status === 401) { location.replace("/"); return; }
+        if (!r.ok) { msg.textContent = d.error || "The blend couldn't be saved. Try again."; save.disabled = false; return; }
+        A.benchmark.saved = clean; bmDraft = null; onApply();
+      } catch { msg.textContent = "Can't reach the server. Check your connection and try again."; save.disabled = false; }
+    });
+    const reset = h("button", { type: "button", class: "link-button dark" }, "Reset to 60/40");
+    reset.addEventListener("click", () => { bmDraft = JSON.parse(JSON.stringify(A.benchmark.defaults)); onApply(); });
+    box.append(rowsEl, h("div", { class: "toolbar" }, add, totalEl), levRow, h("div", { class: "toolbar" }, apply, save, reset, msg));
+    paint();
+    return box;
+  }
+
+  function renderBenchmark(s, A, P, w, rerender) {
+    const cfg = bmCfg(A);
+    const saved = A.benchmark.saved;
+    const isSaved = !bmDraft && !!saved;
+    s.append(section("Benchmark proxy",
+      "Blend up to six indices into one benchmark. Each index is tracked through an ETF, so returns include reinvested dividends (net of a small fund fee). The blend is rebalanced to its weights at each statement date."));
+    const det = h("details", { class: "bm-details" }, h("summary", {}, `${bmDraft ? "Trying" : isSaved ? "Saved blend" : "Default blend"}: ${bmLabel(A, cfg)}`));
+    det.append(benchmarkEditor(A, rerender));
+    if (bmDraft) det.open = true;
+    s.append(det);
+    if (isSaved && saved.savedBy) s.append(h("p", { class: "note" }, `Saved by ${saved.savedBy} on ${fmtDate(String(saved.savedAt || "").slice(0, 10))}. Apply tries a blend in this browser only; Save as default changes it for everyone.`));
+
+    const kp = h("div");
+    s.append(kp);
+    s.append(section("Growth of $1", "The account's time-weighted path at each statement date against the benchmark proxy."));
+    const { box, canvas } = chartBox(320);
+    s.append(box);
+    const bnote = h("p", { class: "note" }, "Loading benchmark…");
+    s.append(bnote);
+    const cmp = h("div");
+    s.append(cmp);
+
+    const labels = P.series.map((x) => fmtDate(x.date));
+    const chart = draw(canvas, {
+      type: "line", data: { labels, datasets: [{ label: "Blue Sky account (TWR)", data: P.series.map((x) => x.growth), borderColor: C.gold, backgroundColor: C.gold, borderWidth: 3, tension: 0.2, pointRadius: 3 }] },
+      options: { responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
+        scales: { y: { ticks: { callback: (v) => "$" + Number(v).toFixed(2) } } },
+        plugins: { tooltip: { callbacks: { label: (c) => (c.raw == null ? `${c.dataset.label}: —` : `${c.dataset.label}: $${Number(c.raw).toFixed(3)} (${pct(c.raw - 1)})`) } } } },
+    });
+
+    bmFetch(A, cfg.components.map((c) => c.symbol)).then((m) => {
+      if (!m.connected) { bnote.textContent = "The benchmark appears once the EODHD token (EODHD_API_TOKEN) is added to this site's Vercel project."; return; }
+      if (m.error || !m.series) { bnote.textContent = "Benchmark prices are unavailable right now."; return; }
+      const full = blendGrowth(A, cfg, m);
+      const si = w.startIndex, base = full[si];
+      const win = full.slice(si).map((g) => (g == null || base == null ? null : g / base));
+      if (chart) {
+        chart.data.datasets.push({ label: `Benchmark: ${bmLabel(A, cfg)}`, data: win, borderColor: C.navy, backgroundColor: C.navy, borderWidth: 2.5, borderDash: [6, 4], tension: 0.2, pointRadius: 2 });
+        if (cfg.components.length > 1) cfg.components.forEach((c, i) => {
+          const ser = m.series[`${c.symbol}.US`];
+          if (!ser || ser[si] == null) return;
+          chart.data.datasets.push({ label: `${c.symbol} alone`, data: ser.slice(si).map((v) => (v == null ? null : v / ser[si])), borderColor: [C.haze, C.grey, C.sky, C.bronze, C.green, C.red][i % 6], borderWidth: 1, tension: 0.2, pointRadius: 0, hidden: true });
+        });
+        chart.update();
+      }
+      const bRet = win[win.length - 1] == null ? null : win[win.length - 1] - 1;
+      const long = P.days >= 365;
+      const ann = (r, d) => (r == null ? null : Math.pow(1 + r, 365 / d) - 1);
+      kp.replaceChildren(kpis([
+        { label: `Account, ${P.label}`, value: pct(P.twr), sub: "time-weighted" },
+        { label: `Benchmark, ${P.label}`, value: pct(bRet), sub: long ? `${pct(ann(bRet, P.days))} annualized` : `cumulative over ${P.days} days` },
+        { label: "Account vs benchmark", value: bRet == null ? "—" : (P.twr - bRet >= 0 ? "+" : "") + pct(P.twr - bRet), sub: "percentage points", lead: true },
+      ]));
+      bnote.textContent = `Benchmark: ${bmLabel(A, cfg)}${cfg.leverage && cfg.leverage !== 1 ? `, borrowing at ${cfg.borrowRate}%` : ""}. Single indices are in the legend; click one to show it.${P.estimated ? " The account's first period is an estimate (see note below)." : ""}`;
+
+      const rows = windowsOf(A).filter((x) => x.available).map((x) => {
+        const b0 = full[x.startIndex], b1 = full[full.length - 1];
+        const br = b0 == null || b1 == null ? null : b1 / b0 - 1;
+        return { ...x, br, ex: br == null ? null : x.twr - br, _class: x.key === w.key ? "sum" : null };
+      });
+      cmp.replaceChildren(section("Account vs benchmark by period"), table([
+        { label: "Period", get: (r) => h("strong", {}, r.label) },
+        { label: "From", num: 1, get: (r) => fmtDate(addDaysIso(r.start, 1)) },
+        { label: "Account (TWR)", num: 1, get: (r) => pct(r.twr) + (r.estimated ? " *" : ""), raw: (r) => r.twr },
+        { label: "Benchmark", num: 1, get: (r) => pct(r.br), raw: (r) => r.br },
+        { label: "Difference", num: 1, get: (r) => (r.ex == null ? "—" : (r.ex >= 0 ? "+" : "") + pct(r.ex)), raw: (r) => r.ex },
+      ], rows));
+    });
+  }
+
   /* ================= PERFORMANCE ================= */
   function renderPerformance(root, A) {
     const rerender = () => renderPerformance(root, A);
@@ -169,32 +357,7 @@
       { label: "", get: (r) => (r.available ? "" : h("span", { class: "muted" }, isoToUs(r.reason))) },
     ], windowsOf(A).map((r) => ({ ...r, _class: r.key === w.key ? "sum" : null }))));
 
-    s.append(section("Growth of $1", "Your account's time-weighted path at each statement date, against total-return benchmarks."));
-    const { box, canvas } = chartBox(320);
-    s.append(box);
-    const bnote = h("p", { class: "note" }, "Loading benchmarks…");
-    s.append(bnote);
-
-    const labels = P.series.map((x) => fmtDate(x.date));
-    const datasets = [{ label: "Blue Sky account (TWR)", data: P.series.map((x) => x.growth), borderColor: C.gold, backgroundColor: C.gold, borderWidth: 3, tension: 0.2, pointRadius: 3 }];
-    const chart = draw(canvas, {
-      type: "line", data: { labels, datasets },
-      options: { responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
-        scales: { y: { ticks: { callback: (v) => "$" + Number(v).toFixed(2) } } },
-        plugins: { tooltip: { callbacks: { label: (c) => `${c.dataset.label}: $${Number(c.raw).toFixed(3)} (${pct(c.raw - 1)})` } } } },
-    });
-    market({ kind: "benchmarks", dates: P.series.map((x) => x.date).join(","), symbols: "SPY,HYG,AGG" }).then((m) => {
-      if (!m.connected) { bnote.textContent = "Benchmarks appear here once the EODHD token is added to this site's Vercel project."; return; }
-      if (m.error || !m.series) { bnote.textContent = "Benchmarks are unavailable right now."; return; }
-      const names = { "SPY.US": ["S&P 500 (SPY)", C.navy], "HYG.US": ["High-yield bonds (HYG)", C.haze], "AGG.US": ["U.S. bonds (AGG)", C.grey] };
-      for (const [k, arr] of Object.entries(m.series)) {
-        const [label, color] = names[k] || [k, C.grey];
-        chart.data.datasets.push({ label, data: arr, borderColor: color, backgroundColor: color, borderWidth: 2, borderDash: [5, 4], tension: 0.2, pointRadius: 0 });
-      }
-      chart.update();
-      const rows = Object.entries(m.series).map(([k, arr]) => `${(names[k] || [k])[0]} ${pct(arr[arr.length - 1] - 1)}`);
-      bnote.textContent = `Same window, total return with dividends reinvested: ${rows.join(", ")}. Benchmarks are unlevered.`;
-    }).catch(() => { bnote.textContent = "Benchmarks are unavailable right now."; });
+    renderBenchmark(s, A, P, w, rerender);
 
     s.append(section("Period by period", "Each row runs between two account values. Gain = ending value − beginning value − net deposits."));
     s.append(table([
