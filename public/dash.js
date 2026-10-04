@@ -73,6 +73,42 @@
 
   /* ---------- reporting windows ---------- */
   let winKey = (() => { try { return sessionStorage.getItem("bs-win") || "YTD"; } catch { return "YTD"; } })();
+  let gLayer = (() => { try { return sessionStorage.getItem("bs-layer") || "portfolio"; } catch { return "portfolio"; } })();
+  let propsRequested = false;
+  const LAYERS = [["portfolio", "Portfolio only"], ["rents", "+ Rents"], ["full", "+ Rents, costs & mortgage"]];
+  // Property cash flows between two dates for the selected layer (null when only the portfolio is shown).
+  function propLayer(lo, hi) {
+    const B = window.BSProps;
+    if (gLayer === "portfolio" || !B || !B.data) return null;
+    const p = B.data.properties[B.current];
+    if (!p || p.status !== "active") return null;
+    const x = B.between(B.current, lo, hi);
+    if (gLayer === "rents") return { name: p.name, rent: x.rent, costs: 0, interest: 0, principal: 0, payment: 0, balloon: 0, economic: x.rent, netCash: x.rent, entries: x.entries };
+    return { name: p.name, ...x };
+  }
+  function layerBar(rerender) {
+    const B = window.BSProps;
+    const wrap = h("div", { class: "periodpick layerbar" });
+    const pick = (k) => { gLayer = k; try { sessionStorage.setItem("bs-layer", k); } catch {} rerender(); };
+    wrap.append(h("div", { class: "periodbar", role: "group", "aria-label": "What to include" }, h("span", { class: "pb-label" }, "Include"),
+      LAYERS.map(([k, label]) => { const on = gLayer === k; const b = h("button", { type: "button", class: "pb" + (on ? " on" : ""), "aria-pressed": on ? "true" : "false" }, label); b.addEventListener("click", () => pick(k)); return b; })));
+    if (gLayer !== "portfolio") {
+      if (!B || !B.data) wrap.append(h("p", { class: "note" }, B ? "Loading property data…" : "Property data isn't available."));
+      else {
+        const D = B.data;
+        if (!D.properties[B.current] || D.properties[B.current].status !== "active") B.current = (D.order || Object.keys(D.properties)).find((id) => D.properties[id].status === "active") || B.current;
+        wrap.append(h("div", { class: "periodbar", role: "group", "aria-label": "Property" }, h("span", { class: "pb-label" }, "Property"),
+          (D.order || Object.keys(D.properties)).map((id) => {
+            const p = D.properties[id], soon = p.status !== "active", on = !soon && id === B.current;
+            const b = h("button", { type: "button", class: "pb" + (on ? " on" : "") + (soon ? " soon" : ""), "aria-pressed": on ? "true" : "false", disabled: soon, title: soon ? `${p.name}: coming soon` : p.name },
+              p.name, soon ? h("span", { class: "soon-tag" }, "Coming soon") : null);
+            b.addEventListener("click", () => { B.current = id; rerender(); });
+            return b;
+          })));
+      }
+    }
+    return wrap;
+  }
   let custom = (() => { try { return JSON.parse(sessionStorage.getItem("bs-custom") || "null"); } catch { return null; } })();
   const windowsOf = (A) => A.performance.windows || [];
   const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -257,8 +293,8 @@
   const bmCache = {};
   const bmCfg = (A) => bmDraft || A.benchmark.saved || A.benchmark.defaults;
   const bmLabel = (A, cfg) => {
-    const name = (sy) => (A.benchmark.catalog.find((c) => c.symbol === sy) || { name: sy }).name;
-    const mix = cfg.components.map((c) => `${+c.weight}% ${name(c.symbol)}`).join(" / ");
+    const name = (c) => (A.benchmark.catalog.find((x) => x.symbol === c.symbol) || {}).name || (c.name && c.name !== c.symbol ? `${c.symbol} (${c.name})` : c.symbol);
+    const mix = cfg.components.map((c) => `${+c.weight}% ${name(c)}`).join(" / ");
     return cfg.leverage && cfg.leverage !== 1 ? `${mix}, ${cfg.leverage}× levered` : mix;
   };
   function bmFetch(A, symbols) {
@@ -289,6 +325,64 @@
     return g;
   }
 
+  /* ---------- public market equivalent (PME) ---------- */
+  // A shadow account that starts with the account's value at the window start, receives the same dated
+  // deposits and withdrawals, and holds the benchmark blend. Income is split out using dividend-adjusted
+  // vs unadjusted prices for each ETF; leverage and borrowing cost follow the benchmark settings.
+  const pmeCache = {};
+  function pmeGrid(A, w) {
+    const set = new Set([w.start, w.end]);
+    valuePoints(A).forEach((p) => { if (p.date > w.start && p.date < w.end) set.add(p.date); });
+    (A.performance.flows || []).forEach((f) => { if (f.d > w.start && f.d <= w.end) set.add(f.d); });
+    for (let m = addDaysIso(w.start, 1).slice(0, 7); monthEnd(m) < w.end; m = addDaysIso(monthEnd(m), 1).slice(0, 7)) if (monthEnd(m) > w.start) set.add(monthEnd(m));
+    return [...set].sort();
+  }
+  function pmeCompute(A, w, cfg, m, grid) {
+    const L = Number(cfg.leverage) || 1, rate = (Number(cfg.borrowRate) || 0) / 100;
+    const flows = A.performance.flows || [];
+    let V = w.begin;
+    const steps = [], missing = new Set();
+    for (let k = 1; k < grid.length; k++) {
+      let tr = 0, inc = 0;
+      for (const c of cfg.components) {
+        const key = `${c.symbol}.US`, T = m.series[key], Pp = m.price && m.price[key];
+        if (!T || T[k] == null || T[k - 1] == null) { missing.add(c.symbol); continue; }
+        const ti = T[k] / T[k - 1] - 1;
+        let pi = Pp && Pp[k] != null && Pp[k - 1] != null ? Pp[k] / Pp[k - 1] - 1 : ti;
+        if (Math.abs(ti - pi) > 0.15) pi = ti; // a split, not a distribution
+        tr += (c.weight / 100) * ti;
+        inc += (c.weight / 100) * Math.max(ti - pi, 0);
+      }
+      const dt = dayDiff(grid[k - 1], grid[k]) / 365;
+      const borrow = V * (L - 1) * rate * dt;
+      const gain = V * L * tr - borrow, income = V * L * inc;
+      const flow = sum(flows.filter((f) => f.d === grid[k]), (f) => f.a);
+      V += gain + flow;
+      steps.push({ d: grid[k], gain, income, borrow, price: gain - income + borrow, flow, value: V });
+    }
+    const total = (lo, hi) => {
+      const st = steps.filter((x) => x.d > lo && x.d <= hi);
+      return { gain: sum(st, (x) => x.gain), income: sum(st, (x) => x.income), borrow: sum(st, (x) => x.borrow), price: sum(st, (x) => x.price), netFlow: sum(st, (x) => x.flow) };
+    };
+    return { ...total(w.start, w.end), begin: w.begin, end: V, steps, between: total, missing: [...missing] };
+  }
+  function pmeFor(A, w, rerender) {
+    const cfg = bmCfg(A);
+    const grid = pmeGrid(A, w);
+    const key = JSON.stringify([cfg.components.map((c) => [c.symbol, c.weight]), cfg.leverage, cfg.borrowRate, grid]);
+    if (pmeCache[key]) return pmeCache[key];
+    pmeCache[key] = { status: "loading" };
+    market({ kind: "benchmarks", dates: grid.join(","), symbols: cfg.components.map((c) => c.symbol).join(","), price: "1" })
+      .then((m) => {
+        if (m.connected === false) pmeCache[key] = { status: "off" };
+        else if (m.error || !m.series) pmeCache[key] = { status: "error" };
+        else pmeCache[key] = { status: "ready", res: pmeCompute(A, w, cfg, m, grid) };
+      })
+      .catch(() => { pmeCache[key] = { status: "error" }; })
+      .finally(rerender);
+    return pmeCache[key];
+  }
+
   function benchmarkEditor(A, onApply) {
     const cat = A.benchmark.catalog, max = A.benchmark.max;
     const cfg = JSON.parse(JSON.stringify(bmCfg(A)));
@@ -296,12 +390,13 @@
     const rowsEl = h("div", { class: "bm-rows" });
     const totalEl = h("span", { class: "bm-total" });
     const msg = h("span", { class: "note inline", role: "status", "aria-live": "polite" });
-    const groups = [...new Set(cat.map((c) => c.group))];
-    const options = (sel) => groups.map((g) => {
-      const og = h("optgroup", { label: g });
-      cat.filter((c) => c.group === g).forEach((c) => og.append(h("option", { value: c.symbol, selected: c.symbol === sel }, `${c.name} (${c.symbol})`)));
-      return og;
-    });
+    const listId = "bm-tickers-" + Math.random().toString(36).slice(2, 8);
+    const datalist = h("datalist", { id: listId }, cat.map((c) => h("option", { value: c.symbol }, `${c.name} · ${c.group}`)));
+    const lookups = {};
+    const lookup = (sym) => {
+      if (!lookups[sym]) lookups[sym] = market({ kind: "lookup", symbol: sym }).catch(() => ({ error: 1 }));
+      return lookups[sym];
+    };
     const total = () => cfg.components.reduce((a, c) => a + (Number(c.weight) || 0), 0);
     const paintTotal = () => {
       const t = Math.round(total() * 100) / 100;
@@ -310,24 +405,36 @@
     };
     function paint() {
       rowsEl.replaceChildren(...cfg.components.map((c, i) => {
-        const sel = h("select", { "aria-label": `Index ${i + 1}` }, options(c.symbol));
-        sel.addEventListener("change", () => { c.symbol = sel.value; });
+        const sel = h("input", { type: "text", class: "bm-ticker", list: listId, value: c.symbol, maxlength: "10", autocomplete: "off", spellcheck: "false", "aria-label": `Ticker ${i + 1}`, placeholder: "Ticker" });
+        const info = h("small", { class: "muted" });
+        const describe = () => {
+          const known = cat.find((x) => x.symbol === c.symbol);
+          if (known) { info.textContent = `${known.name}, via ${known.proxy}`; c.name = known.name; c.ok = true; return; }
+          if (!c.symbol) { info.textContent = ""; c.ok = false; return; }
+          info.textContent = "Checking…"; c.ok = null;
+          const want = c.symbol;
+          lookup(want).then((r) => {
+            if (c.symbol !== want) return;
+            if (r.connected === false) { info.textContent = "Ticker check needs the EODHD token; it will be checked when prices load."; c.ok = true; return; }
+            if (r.error) { info.textContent = "Couldn't check this ticker right now."; c.ok = true; return; }
+            if (!r.found) { info.textContent = `${want} wasn't found on a US exchange.`; info.classList.add("warn-text"); c.ok = false; return; }
+            info.classList.remove("warn-text");
+            c.name = r.name; c.ok = true; info.textContent = `${r.name}${r.type ? ` · ${r.type}` : ""}`;
+          });
+        };
+        sel.addEventListener("change", () => { c.symbol = sel.value.trim().toUpperCase().replace(/\.US$/, ""); sel.value = c.symbol; c.name = null; info.classList.remove("warn-text"); describe(); });
+        describe();
         const wt = h("input", { type: "number", min: "0", max: "100", step: "1", value: c.weight, "aria-label": `Weight for index ${i + 1}, percent` });
         wt.addEventListener("input", () => { c.weight = Number(wt.value); paintTotal(); });
         const rm = h("button", { type: "button", class: "link-button dark", "aria-label": `Remove index ${i + 1}`, disabled: cfg.components.length === 1 }, "Remove");
         rm.addEventListener("click", () => { cfg.components.splice(i, 1); paint(); });
-        const proxy = (cat.find((x) => x.symbol === c.symbol) || {}).proxy;
-        return h("div", { class: "bm-row" }, sel, h("label", { class: "bm-wt" }, wt, h("span", {}, "%")), rm, proxy ? h("small", { class: "muted" }, `via ${proxy}`) : null);
+        return h("div", { class: "bm-row" }, sel, h("label", { class: "bm-wt" }, wt, h("span", {}, "%")), rm, info);
       }));
       add.disabled = cfg.components.length >= max;
       paintTotal();
     }
-    const add = h("button", { type: "button", class: "link-button dark" }, "+ Add index");
-    add.addEventListener("click", () => {
-      const used = new Set(cfg.components.map((c) => c.symbol));
-      const next = cat.find((c) => !used.has(c.symbol));
-      if (next) { cfg.components.push({ symbol: next.symbol, weight: 0 }); paint(); }
-    });
+    const add = h("button", { type: "button", class: "link-button dark" }, "+ Add ETF");
+    add.addEventListener("click", () => { cfg.components.push({ symbol: "", weight: 0 }); paint(); const inputs = rowsEl.querySelectorAll(".bm-ticker"); inputs[inputs.length - 1].focus(); });
     const pos = A.positions;
     const acctLev = pos && pos.net > 0 ? pos.gross / pos.net : null;
     const lev = h("input", { type: "number", min: "0.5", max: "3", step: "0.05", value: cfg.leverage ?? 1 });
@@ -338,6 +445,10 @@
       h("label", { class: "tax-field" }, h("span", {}, "Leverage (1.0 = none)"), lev, h("small", {}, acctLev ? `The account runs about ${acctLev.toFixed(2)}× (gross ÷ net) as of ${fmtDate(pos.asOf)}.` : "")),
       h("label", { class: "tax-field" }, h("span", {}, "Borrowing cost %"), rate, h("small", {}, "Charged on the levered portion only.")));
     const valid = () => {
+      const live = cfg.components.filter((c) => c.weight > 0);
+      if (live.some((c) => !/^[A-Z][A-Z0-9-]{0,9}$/.test(c.symbol || ""))) return "Enter a US ticker for each ETF with a weight, like SPY or JEPI.";
+      if (live.some((c) => c.ok === false)) return `${live.find((c) => c.ok === false).symbol} wasn't found. Check the ticker.`;
+      if (live.some((c) => c.ok == null)) return "Still checking a ticker; try again in a moment.";
       if (cfg.components.some((c) => !(Number(c.weight) >= 0))) return "Enter a weight for each index.";
       if (new Set(cfg.components.map((c) => c.symbol)).size !== cfg.components.length) return "Each index can appear only once.";
       if (Math.abs(total() - 100) > 0.01) return `Weights add up to ${Math.round(total() * 100) / 100}%; they need to total 100%.`;
@@ -347,13 +458,13 @@
     const apply = h("button", { type: "button", class: "btn-small" }, "Apply");
     apply.addEventListener("click", () => {
       const e = valid(); if (e) { msg.textContent = e; return; }
-      bmDraft = { ...cfg, components: cfg.components.filter((c) => c.weight > 0).map((c) => ({ ...c })) };
+      bmDraft = { ...cfg, components: cfg.components.filter((c) => c.weight > 0).map((c) => ({ symbol: c.symbol, name: c.name || c.symbol, weight: c.weight })) };
       onApply();
     });
     const save = h("button", { type: "button", class: "btn-small ghost" }, "Save as default");
     save.addEventListener("click", async () => {
       const e = valid(); if (e) { msg.textContent = e; return; }
-      const clean = { ...cfg, components: cfg.components.filter((c) => c.weight > 0) };
+      const clean = { ...cfg, components: cfg.components.filter((c) => c.weight > 0).map((c) => ({ symbol: c.symbol, name: c.name || c.symbol, weight: c.weight })) };
       save.disabled = true; msg.textContent = "Saving…";
       try {
         const r = await fetch("/api/upload", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ benchmark: clean }) });
@@ -365,7 +476,7 @@
     });
     const reset = h("button", { type: "button", class: "link-button dark" }, "Reset to 60/40");
     reset.addEventListener("click", () => { bmDraft = JSON.parse(JSON.stringify(A.benchmark.defaults)); onApply(); });
-    box.append(rowsEl, h("div", { class: "toolbar" }, add, totalEl), levRow, h("div", { class: "toolbar" }, apply, save, reset, msg));
+    box.append(datalist, h("p", { class: "note" }, "Type any US-listed ETF ticker, or pick a suggestion. Weights must total 100%."), rowsEl, h("div", { class: "toolbar" }, add, totalEl), levRow, h("div", { class: "toolbar" }, apply, save, reset, msg));
     paint();
     return box;
   }
@@ -375,7 +486,7 @@
     const saved = A.benchmark.saved;
     const isSaved = !bmDraft && !!saved;
     s.append(section("Benchmark proxy",
-      "Blend up to six indices into one benchmark. Each index is tracked through an ETF, so returns include reinvested dividends (net of a small fund fee). The blend is rebalanced to its weights at each statement date."));
+      "Blend up to six ETFs, any US ticker, into one benchmark. Returns use dividend-adjusted prices, so they include reinvested distributions net of each fund's fee. The blend is rebalanced to its weights at each statement date."));
     const det = h("details", { class: "bm-details" }, h("summary", {}, `${bmDraft ? "Trying" : isSaved ? "Saved blend" : "Default blend"}: ${bmLabel(A, cfg)}`));
     det.append(benchmarkEditor(A, rerender));
     if (bmDraft) det.open = true;
@@ -490,22 +601,46 @@
     const gainSum = sum(MG.months.filter((m) => !m.group), (m) => m.gain) + sum(MG.groups, (g) => g.gain);
     const tot = { income: sum(MG.months, (m) => m.income), interest: sum(MG.months, (m) => m.interest), realized: sum(MG.months, (m) => m.realized),
       unrealized: sum(MG.months.filter((m) => !m.group), (m) => m.unrealized) + sum(MG.groups, (g) => g.unrealized), net: sum(MG.months.filter((m) => !m.group), (m) => m.netFlow) + sum(MG.groups, (g) => g.netFlow) };
+    const X = MG.layer && MG.layer !== "portfolio", full = MG.layer === "full";
+    const pv = (r, k) => (r.isGroup ? r.prop[k] : r.prop[k]);
+    const cols = [
+      { label: "Month", get: (r) => (r.isGroup ? h("strong", {}, r.label) : r.label), total: "Total" },
+      { label: "Begin value", num: 1, get: (r) => dash(r, usd(r.begin)), total: "" },
+      { label: "Net deposits", num: 1, get: (r) => dash(r, usd(r.netFlow)), raw: (r) => (r.group && !r.isGroup ? null : r.netFlow), total: usd(tot.net) },
+      { label: "Income", num: 1, get: (r) => usd(r.income), total: usd(tot.income) },
+      { label: "Margin interest", num: 1, get: (r) => usd(r.interest), raw: (r) => r.interest, total: usd(tot.interest) },
+      { label: "Realized", num: 1, get: (r) => usd(r.realized), raw: (r) => r.realized, total: usd(tot.realized) },
+      { label: "Unrealized", num: 1, get: (r) => dash(r, usd(r.unrealized)), raw: (r) => (r.group && !r.isGroup ? null : r.unrealized), total: usd(tot.unrealized) },
+      { label: X ? "Portfolio gain" : "Total gain / loss", num: 1, get: (r) => dash(r, X ? usd(r.gain) : h("strong", {}, usd(r.gain))), raw: (r) => (r.group && !r.isGroup ? null : r.gain), total: usd(gainSum) },
+      { label: "Return", num: 1, get: (r) => dash(r, pct(r.ret) + (r.estimated ? " *" : "")), raw: (r) => (r.group && !r.isGroup ? null : r.ret), total: pct(P.twr) },
+    ];
+    if (X) {
+      // Property amounts are exact by month; group rows repeat the sum of their months, so totals use months only.
+      const pt = (k) => sum(MG.months, (m) => m.prop[k]);
+      const econTot = gainSum + pt("economic");
+      cols.push({ label: "Rent", num: 1, get: (r) => usd(pv(r, "rent")), total: usd(pt("rent")) });
+      if (full) cols.push(
+        { label: "Property costs", num: 1, get: (r) => usd(-pv(r, "costs")), raw: (r) => -pv(r, "costs"), total: usd(-pt("costs")) },
+        { label: "Mortgage interest", num: 1, get: (r) => usd(-pv(r, "interest")), raw: (r) => -pv(r, "interest"), total: usd(-pt("interest")) });
+      cols.push({ label: "Combined result", num: 1, get: (r) => dash(r, h("strong", {}, usd(r.gain + pv(r, "economic")))), raw: (r) => (r.group && !r.isGroup ? null : r.gain + pv(r, "economic")), total: usd(econTot) });
+      if (full) cols.push(
+        { label: "Principal paid", num: 1, get: (r) => usd(pv(r, "principal") + pv(r, "balloon")), total: usd(pt("principal") + pt("balloon")) },
+        { label: "Property net cash", num: 1, get: (r) => usd(pv(r, "netCash")), raw: (r) => pv(r, "netCash"), total: usd(pt("netCash")) });
+    }
+    if (MG.pme) {
+      const pe = (r) => (r.prop ? r.prop.economic : 0);
+      const pmT = sum(MG.months, (m) => m.pme.gain), peT = X ? sum(MG.months, (m) => m.prop.economic) : 0;
+      const actT = gainSum + peT;
+      cols.push(
+        { label: X ? "Benchmark + property" : "Benchmark equivalent", num: 1, get: (r) => usd(r.pme.gain + pe(r)), raw: (r) => r.pme.gain + pe(r), total: usd(pmT + peT) },
+        { label: "Difference", num: 1, get: (r) => dash(r, ((r.gain - r.pme.gain) >= 0 ? "+" : "") + usd(r.gain - r.pme.gain)), raw: (r) => (r.group && !r.isGroup ? null : r.gain - r.pme.gain), total: ((actT - pmT - peT) >= 0 ? "+" : "") + usd(actT - pmT - peT) });
+    }
     const body = h("div", { class: "bs-dialog-body" },
-      h("div", { class: "bs-dialog-head" }, h("h3", { id: "mg-title" }, `Gain and loss by month, ${P.label}`), close),
-      table([
-        { label: "Month", get: (r) => (r.isGroup ? h("strong", {}, r.label) : r.label) },
-        { label: "Begin value", num: 1, get: (r) => dash(r, usd(r.begin)) },
-        { label: "Net deposits", num: 1, get: (r) => dash(r, usd(r.netFlow)), raw: (r) => (r.group && !r.isGroup ? null : r.netFlow) },
-        { label: "Income", num: 1, get: (r) => usd(r.income) },
-        { label: "Margin interest", num: 1, get: (r) => usd(r.interest), raw: (r) => r.interest },
-        { label: "Realized", num: 1, get: (r) => usd(r.realized), raw: (r) => r.realized },
-        { label: "Unrealized", num: 1, get: (r) => dash(r, usd(r.unrealized)), raw: (r) => (r.group && !r.isGroup ? null : r.unrealized) },
-        { label: "Total gain / loss", num: 1, get: (r) => dash(r, h("strong", {}, usd(r.gain))), raw: (r) => (r.group && !r.isGroup ? null : r.gain) },
-        { label: "Return", num: 1, get: (r) => dash(r, pct(r.ret) + (r.estimated ? " *" : "")), raw: (r) => (r.group && !r.isGroup ? null : r.ret) },
-      ], rows, { foot: {} }));
+      h("div", { class: "bs-dialog-head" }, h("h3", { id: "mg-title" }, `Gain and loss by month, ${P.label}${X ? ` · portfolio + ${MG.propName}` : ""}`), close),
+      table(cols, rows, { foot: {} }));
     dlg.append(body);
     const foot = body.querySelector("tfoot tr");
-    if (foot) ["Total", "", usd(tot.net), usd(tot.income), usd(tot.interest), usd(tot.realized), usd(tot.unrealized), usd(gainSum), pct(P.twr)].forEach((v, i) => { foot.children[i].textContent = v; foot.children[i].classList.toggle("neg", String(v).startsWith("−")); });
+    if (foot) cols.forEach((c, i) => { const v = c.total ?? ""; foot.children[i].textContent = v; foot.children[i].classList.toggle("neg", String(v).startsWith("−")); });
     if (MG.groups.length) body.append(h("p", { class: "note" }, `Months marked "combined" share one statement period because the ${MG.groups.map((g) => g.missing.map(fmtDate).join(", ")).join(", ")} account value isn't on file. Their income, margin interest and realized figures are exact; the unrealized change and total are shown on the combined row. Enter the statement value on the Upload page to split them.`));
     if (MG.months.some((m) => m.estimated || (m.group && m.group.estimated))) body.append(h("p", { class: "note" }, "* The 3/2 wire landed inside this period, so the return is a cash-flow-weighted estimate."));
     if (MG.months.some((m) => m.hi !== monthEnd(m.month))) body.append(h("p", { class: "note" }, "Months marked with a date run only to the latest account value."));
@@ -589,8 +724,13 @@
     if (!w) return unavailable(root, "Gains & losses", A, "perf", rerender);
     const P = perfView(A, w), pos = A.positions;
     const R = realizedView(A, w.start, w.end);
+    if (gLayer !== "portfolio" && window.BSProps && !window.BSProps.data && !propsRequested) {
+      propsRequested = true;
+      window.BSProps.load().then(() => { if (location.hash.replace("#", "") === "gains" || !location.hash) rerender(); }).catch(() => {});
+    }
     const s = sheet("Gains & losses", "Dollar results: what you made, how much is realized and what's still open in current positions.");
     s.append(periodBar(A, "perf", rerender));
+    s.append(layerBar(rerender));
     s.append(kpis([
       { label: `Gain, ${P.label}`, value: usd(P.totalGain), sub: `${fmtDate(addDaysIso(P.start, 1))} – ${fmtDate(P.end)}`, lead: true },
       { label: "Realized (net)", value: usd(R.net), sub: `${usd(R.gains)} gains, ${usd(R.losses)} losses` },
@@ -598,8 +738,61 @@
       { label: "Income received", value: usd(P.income), sub: "distributions and interest" },
       { label: "Margin interest", value: usd(P.interest), sub: "paid on the loan" },
     ]));
+    const X = propLayer(w.start, w.end);
+    if (X) {
+      const full = gLayer === "full";
+      s.append(section(`Portfolio + ${X.name}, ${P.label}`, full
+        ? "Combined result = portfolio gain + rent − property costs − mortgage interest. Principal is shown separately: it's cash out the door but it pays down the loan, so it isn't a loss. Property net cash is what the building put in or took out of the bank."
+        : "Combined result = portfolio gain + rent received. Choose \u201c+ Rents, costs & mortgage\u201d to net out property costs and the mortgage."));
+      const items = [
+        { label: "Combined result", value: usd(P.totalGain + X.economic), sub: `${fmtDate(addDaysIso(P.start, 1))} – ${fmtDate(P.end)}`, lead: true },
+        { label: "Portfolio gain", value: usd(P.totalGain) },
+        { label: "Rent received", value: usd(X.rent) },
+      ];
+      if (full) items.push(
+        { label: "Property costs", value: usd(-X.costs), sub: "taxes, insurance, repairs, other" },
+        { label: "Mortgage interest", value: usd(-X.interest), sub: X.payment ? `${usd(X.payment)} of payments` : "no mortgage payments in period" },
+        { label: "Principal paid", value: usd(X.principal + X.balloon), sub: "pays down the loan; not a cost" },
+        { label: "Property net cash", value: usd(X.netCash), sub: "rent − costs − mortgage payments" });
+      s.append(kpis(items));
+      if (!X.entries && !X.payment) s.append(h("p", { class: "note" }, `No ${full ? "rent, expenses or mortgage payments" : "rent"} are on file for ${X.name} in this period. Add them on the Properties tab.`));
+    }
+
+    const PM = pmeFor(A, w, () => { if (root.contains(s)) rerender(); });
+    const PR = PM.status === "ready" && !PM.res.missing.length ? PM.res : null;
+    s.append(section("Public market equivalent", `What the same dollars would have done in the benchmark: the account's ${usd(w.begin)} on ${fmtDate(w.start)}, plus every deposit and withdrawal on the day it happened, invested in ${bmLabel(A, bmCfg(A))}. Change the blend on the Performance tab.`));
+    if (PM.status === "loading") s.append(h("p", { class: "note" }, "Loading benchmark prices…"));
+    else if (PM.status === "off") s.append(h("p", { class: "note" }, "Add the EODHD token to the Vercel project to turn on the benchmark comparison."));
+    else if (PM.status === "error") s.append(h("p", { class: "note" }, "Benchmark prices are unavailable right now."));
+    else if (!PR) s.append(h("p", { class: "note" }, `Price history for ${PM.res.missing.join(", ")} doesn't cover this period, so the comparison can't be drawn. Pick a later period or a different ETF.`));
+    else {
+      const diff = P.totalGain - PR.gain;
+      s.append(kpis([
+        { label: "Benchmark-equivalent gain", value: usd(PR.gain), sub: `ending value ${usd(PR.end)}`, lead: true },
+        { label: "Account vs benchmark", value: (diff >= 0 ? "+" : "") + usd(diff), sub: diff >= 0 ? "account ahead" : "account behind" },
+        { label: "Benchmark income", value: usd(PR.income), sub: `account: ${usd(P.income)}` },
+        { label: "Benchmark price change", value: usd(PR.price), sub: `account: ${usd(P.realized + P.unrealized)}` },
+      ]));
+      const rows = [
+        { l: "Ending value", a: w.endValue, b: PR.end },
+        { l: "Income (distributions and interest)", a: P.income, b: PR.income },
+        { l: "Price change (realized + unrealized)", a: P.realized + P.unrealized, b: PR.price },
+        { l: "Borrowing cost", a: P.interest, b: -PR.borrow },
+        { l: "Total gain", a: P.totalGain, b: PR.gain, _class: "sum" },
+      ];
+      if (X) rows.push({ l: `Combined with ${X.name} (${gLayer === "full" ? "rent, costs, mortgage interest" : "rent"})`, a: P.totalGain + X.economic, b: PR.gain + X.economic, _class: "total" });
+      s.append(table([
+        { label: "", get: (r) => r.l },
+        { label: "Account", num: 1, get: (r) => usd(r.a), raw: (r) => r.a },
+        { label: "Benchmark equivalent", num: 1, get: (r) => usd(r.b), raw: (r) => r.b },
+        { label: "Difference", num: 1, get: (r) => (r.a - r.b >= 0 ? "+" : "") + usd(r.a - r.b), raw: (r) => r.a - r.b },
+      ], rows));
+      s.append(h("p", { class: "note" }, `Net deposits in the period: ${usd(PR.netFlow)}, applied to both on the same dates.${(bmCfg(A).leverage || 1) !== 1 ? ` The benchmark is levered ${bmCfg(A).leverage}× at ${bmCfg(A).borrowRate}%.` : " The benchmark isn't levered; set leverage on the Performance tab to match the margin."} Benchmark income is estimated from each ETF's distributions; the property layer is identical on both sides.`));
+    }
 
     const MG = monthlyGains(A, w.start, w.end);
+    if (PR) { MG.pme = PR; MG.months.forEach((m) => { m.pme = PR.between(m.lo, m.hi); }); MG.groups.forEach((g) => { g.pme = PR.between(g.start, g.end); }); }
+    if (X) { MG.months.forEach((m) => { m.prop = propLayer(m.lo, m.hi); }); MG.groups.forEach((g) => { g.prop = propLayer(g.start, g.end); }); MG.layer = gLayer; MG.propName = X.name; }
     const mgSec = section("Monthly gain, by source", "Calendar months. Income, margin interest and realized results are exact by date. The change in unrealized gains needs an account value at each month-end.");
     const openBtn = h("button", { type: "button", class: "btn-small" }, "Month-by-month totals");
     mgSec.append(h("div", { class: "toolbar" }, openBtn, h("span", { class: "note inline" }, "Or click any bar.")));
@@ -607,6 +800,12 @@
     const { box, canvas } = chartBox(320);
     s.append(box);
     const showTotals = () => monthlyDialog(MG, P);
+    const propSets = X ? [
+      { label: "Rent", data: MG.months.map((m) => m.prop.rent), backgroundColor: C.gold, stack: "g" },
+      ...(gLayer === "full" ? [
+        { label: "Property costs", data: MG.months.map((m) => -m.prop.costs), backgroundColor: "#7d6aa8", stack: "g" },
+        { label: "Mortgage interest", data: MG.months.map((m) => -m.prop.interest), backgroundColor: "#5b6b85", stack: "g" }] : []),
+    ] : [];
     openBtn.addEventListener("click", showTotals);
     const mrows = MG.months;
     draw(canvas, {
@@ -616,12 +815,16 @@
         { label: "Margin interest", data: mrows.map((m) => m.interest), backgroundColor: C.bronze, stack: "g" },
         { label: "Realized", data: mrows.map((m) => m.realized), backgroundColor: C.red, stack: "g" },
         { label: "Unrealized", data: mrows.map((m) => (m.group ? 0 : m.unrealized)), backgroundColor: C.haze, stack: "g" },
+        ...propSets,
+        ...(PR ? [{ type: "line", label: X ? "Benchmark equivalent + property" : "Benchmark-equivalent gain", data: mrows.map((m) => m.pme.gain + (m.prop ? m.prop.economic : 0)), borderColor: C.navy, backgroundColor: C.navy, pointRadius: 3, borderWidth: 2, stack: "pme", order: -1 }] : []),
         ...(MG.groups.length ? [{ label: "Unrealized, months combined", data: mrows.map((m) => (m.group && m.groupLast ? m.group.unrealized : 0)), backgroundColor: "#c9d8ec", borderColor: C.sky, borderWidth: 1, stack: "g" }] : []),
       ] },
       options: { responsive: true, maintainAspectRatio: false, onClick: showTotals, interaction: { mode: "index", intersect: false },
         plugins: { tooltip: { filter: (c) => !!c.raw, callbacks: {
           label: (c) => `${c.dataset.label}: ${usd(c.raw)}`,
-          afterBody: (items) => { if (!items.length) return []; const m = mrows[items[0].dataIndex]; return m.group ? [`Unrealized for ${m.group.label} is combined: ${usd(m.group.unrealized)}`, `${m.group.label} total gain: ${usd(m.group.gain)}`] : [`Total gain: ${usd(m.gain)}`]; },
+          afterBody: (items) => { if (!items.length) return []; const m = mrows[items[0].dataIndex]; const pe = m.prop ? m.prop.economic : 0;
+            return m.group ? [`Unrealized for ${m.group.label} is combined: ${usd(m.group.unrealized)}`, `${m.group.label} portfolio gain: ${usd(m.group.gain)}`].concat(m.prop ? [`${m.group.label} combined result: ${usd(m.group.gain + m.group.prop.economic)}`] : [])
+              : m.prop ? [`Portfolio gain: ${usd(m.gain)}`, `Combined result: ${usd(m.gain + pe)}`] : [`Total gain: ${usd(m.gain)}`]; },
         } } },
         scales: { x: { stacked: true }, y: { stacked: true, ticks: { callback: moneyTick } } } },
     });
