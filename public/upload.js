@@ -26,12 +26,36 @@
     load();
   }
 
+  // Excel files are converted to CSV in the browser (first sheet), so the server only ever sees CSV.
+  let xlsxLib = null;
+  function loadXlsx() {
+    if (xlsxLib) return xlsxLib;
+    xlsxLib = new Promise((resolve, reject) => {
+      const sc = document.createElement("script");
+      sc.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+      sc.onload = () => resolve(window.XLSX);
+      sc.onerror = () => { xlsxLib = null; reject(new Error("xlsx")); };
+      document.head.append(sc);
+    });
+    return xlsxLib;
+  }
+  async function toText(f) {
+    if (/\.xlsx?$/i.test(f.name)) {
+      const XLSX = await loadXlsx();
+      const wb = XLSX.read(await f.arrayBuffer(), { type: "array", raw: false });
+      return XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]], { forceQuotes: true });
+    }
+    return f.text();
+  }
+
   async function sendFiles(fileList) {
-    const files = [...fileList].filter((f) => /\.csv$/i.test(f.name) || f.type === "text/csv");
-    if (!files.length) { results.replaceChildren(h("p", "msg err", "Choose CSV files exported from Schwab.")); return; }
+    const files = [...fileList].filter((f) => /\.(csv|xlsx|xls)$/i.test(f.name) || f.type === "text/csv");
+    if (!files.length) { results.replaceChildren(h("p", "msg err", "Choose CSV or Excel files exported from Schwab.")); return; }
     if (files.some((f) => f.size > 3.5e6)) { results.replaceChildren(h("p", "msg err", "One file is over 3.5 MB. Export a shorter date range and upload again.")); return; }
     results.replaceChildren(h("p", "msg", `Uploading ${files.length} file${files.length > 1 ? "s" : ""}…`));
-    const payload = await Promise.all(files.map(async (f) => ({ name: f.name, text: await f.text() })));
+    let payload;
+    try { payload = await Promise.all(files.map(async (f) => ({ name: f.name, text: await toText(f) }))); }
+    catch { results.replaceChildren(h("p", "msg err", "An Excel file couldn't be opened here. Upload the original CSV from Schwab instead.")); return; }
     showResults(await post({ files: payload }));
   }
 
@@ -53,6 +77,14 @@
     const r = await fetch("/api/upload", { credentials: "same-origin" });
     if (!r.ok) return;
     const d = await r.json();
+    const labels = { transactions: "Transactions", positions: "Positions", realized: "Realized Gain/Loss", income: "Investment Income", balances: "Balances" };
+    Object.keys(labels).forEach((k) => {
+      const el = document.getElementById("st-" + k);
+      if (!el) return;
+      const f = d.onFile && d.onFile[k];
+      el.className = "status" + (f ? "" : " none");
+      el.textContent = f ? `On file: ${f.name}, uploaded ${fmt(f.uploadedAt)}` : "Not uploaded yet";
+    });
     const t = h("table", "grid dgrid");
     t.innerHTML = "<thead><tr><th>Date</th><th class='num'>Account value</th><th>Source</th><th></th></tr></thead>";
     const tb = h("tbody");

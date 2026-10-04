@@ -5,6 +5,7 @@
   const fmtDate = (iso) => { if (!iso) return "—"; const [y, m, d] = iso.split("-"); return `${+m}/${+d}/${y}`; };
   const monthLabel = (ym) => { const [y, m] = ym.split("-"); return new Date(Date.UTC(+y, +m - 1, 1)).toLocaleString("en-US", { month: "short", year: "numeric", timeZone: "UTC" }); };
   const sum = (a, f = (x) => x) => a.reduce((s, x) => s + f(x), 0);
+  const isoToUs = (t) => String(t || "").replace(/(\d{4})-(\d{2})-(\d{2})/g, (_, y, m, d) => `${+m}/${+d}/${y}`);
 
   const h = (tag, attrs = {}, ...kids) => {
     const n = document.createElement(tag);
@@ -67,20 +68,91 @@
     return r.ok ? r.json() : { connected: true, error: "unavailable" };
   }
 
+
+  /* ---------- reporting windows ---------- */
+  let winKey = (() => { try { return sessionStorage.getItem("bs-win") || "YTD"; } catch { return "YTD"; } })();
+  const windowsOf = (A) => A.performance.windows || [];
+  function pickWindow(A, mode) {
+    const ws = windowsOf(A);
+    const ok = (w) => (mode === "cash" ? w.cashAvailable : w.available);
+    return ws.find((w) => w.key === winKey && ok(w)) || ws.find((w) => w.key === "YTD" && ok(w)) || ws.find(ok);
+  }
+  function periodBar(A, mode, rerender) {
+    const current = pickWindow(A, mode);
+    const bar = h("div", { class: "periodbar", role: "group", "aria-label": "Reporting period" });
+    windowsOf(A).forEach((w) => {
+      const ok = mode === "cash" ? w.cashAvailable : w.available;
+      const reason = mode === "cash" ? `Transaction history starts ${fmtDate(A.income.firstDate)}.` : isoToUs(w.reason);
+      const b = h("button", { type: "button", class: "pb" + (current && w.key === current.key ? " on" : ""), "aria-pressed": current && w.key === current.key ? "true" : "false", disabled: !ok, title: ok ? null : reason }, w.label);
+      b.addEventListener("click", () => { winKey = w.key; try { sessionStorage.setItem("bs-win", w.key); } catch {} rerender(); });
+      bar.append(b);
+    });
+    if (current) {
+      const from = mode === "cash" ? current.cashStart : current.start;
+      bar.append(h("span", { class: "pb-range" }, `${fmtDate(from)} – ${fmtDate(current.end)}`));
+    }
+    return bar;
+  }
+  // Performance and gain figures for one window.
+  function perfView(A, w) {
+    const P = A.performance, si = w.startIndex;
+    const base = P.series[si].growth;
+    return { ...P, start: w.start, end: w.end, days: w.days, beginValue: w.begin, endValue: w.endValue, netContributions: w.netFlow,
+      totalGain: w.gain, twr: w.twr, twrAnnualized: w.twrAnnualized, mwr: w.mwr, mwrAnnualized: w.mwrAnnualized,
+      income: w.income, interest: w.interest, realized: w.realized, unrealized: w.unrealized, marketChange: w.gain - w.income - w.interest,
+      periods: P.periods.slice(si), series: P.series.slice(si).map((x) => ({ date: x.date, growth: x.growth / base })), estimated: w.estimated, label: w.label };
+  }
+  // Realized lots closed inside the window, grouped like the server's yearly summary.
+  function realizedView(A, start, end) {
+    const names = {};
+    Object.values(A.realized).forEach((r) => r.bySymbol.forEach((b) => { names[b.symbol] = b.name; }));
+    const lots = Object.values(A.realized).flatMap((r) => r.detail).filter((l) => l.c > start && l.c <= end);
+    const by = {};
+    lots.forEach((l) => {
+      const b = (by[l.s] = by[l.s] || { symbol: l.s, name: names[l.s] || "", lots: 0, proceeds: 0, cost: 0, gain: 0, washLots: 0, disallowed: 0 });
+      b.lots++; b.proceeds += l.p; b.cost += l.b; b.gain += l.g; if (l.w) { b.washLots++; b.disallowed += l.d; }
+    });
+    return { net: sum(lots, (l) => l.g), gains: sum(lots.filter((l) => l.g > 0), (l) => l.g), losses: sum(lots.filter((l) => l.g < 0), (l) => l.g),
+      st: sum(lots.filter((l) => l.t === "ST"), (l) => l.g), lt: sum(lots.filter((l) => l.t === "LT"), (l) => l.g), count: lots.length,
+      bySymbol: Object.values(by).sort((a, b) => a.gain - b.gain) };
+  }
+  function unavailable(root, title, A, mode, rerender) {
+    const s = sheet(title);
+    s.append(periodBar(A, mode, rerender), h("p", { class: "note" }, "No period has enough data yet. Upload files or add statement values on the Upload page."));
+    root.replaceChildren(s);
+  }
+
   /* ================= PERFORMANCE ================= */
   function renderPerformance(root, A) {
-    const P = A.performance;
+    const rerender = () => renderPerformance(root, A);
+    const w = pickWindow(A, "perf");
+    if (!w) return unavailable(root, "Performance", A, "perf", rerender);
+    const P = perfView(A, w);
+    const long = P.days >= 365;
     const s = sheet("Performance", `Account …965, ${fmtDate(P.start)} through ${fmtDate(P.end)}. Returns are measured on net equity, after the margin loan, so they include the effect of leverage.`);
+    s.append(periodBar(A, "perf", rerender));
     s.append(kpis([
-      { label: "Time-weighted return", value: pct(P.twr), sub: `${pct(P.twrAnnualized)} annualized`, lead: true },
-      { label: "Money-weighted return (IRR)", value: pct(P.mwr), sub: "annualized, on your actual dollars" },
-      { label: "Total gain", value: usd(P.totalGain), sub: "after margin interest" },
+      { label: `Time-weighted return, ${P.label}`, value: pct(P.twr), sub: long ? `${pct(P.twrAnnualized)} annualized` : `cumulative over ${P.days} days`, lead: true },
+      { label: `Money-weighted return, ${P.label}`, value: pct(P.mwr), sub: long ? "annualized, on your actual dollars" : `for the period; ${pct(P.mwrAnnualized)} if annualized` },
+      { label: "Gain", value: usd(P.totalGain), sub: "after margin interest" },
       { label: "Net money added", value: usd(P.netContributions), sub: "deposits less withdrawals" },
       { label: "Account value", value: usd(P.endValue), sub: `net equity on ${fmtDate(P.end)}` },
     ]));
     s.append(h("div", { class: "explain" },
       h("p", {}, h("strong", {}, "Time-weighted "), "measures the strategy itself. It links each month's return and ignores when money went in or out, so it's the number to compare with a benchmark or a manager's target."),
-      h("p", {}, h("strong", {}, "Money-weighted "), "measures what your dollars earned. It counts timing: money added before a down month lowers it. When the two differ, timing of deposits and withdrawals is the reason.")));
+      h("p", {}, h("strong", {}, "Money-weighted "), "measures what your dollars earned. It counts timing: money added before a down month lowers it. When the two differ, timing of deposits and withdrawals is the reason. Periods under a year are shown as-is, not annualized.")));
+
+    s.append(section("Returns by period", "Every standard window at once. Longer windows fill in as history builds."));
+    s.append(table([
+      { label: "Period", get: (r) => h("strong", {}, r.label) },
+      { label: "From", num: 1, get: (r) => (r.available ? fmtDate(r.start) : "—") },
+      { label: "Time-weighted", num: 1, get: (r) => (r.available ? pct(r.twr) + (r.estimated ? " *" : "") : "—"), raw: (r) => (r.available ? r.twr : null) },
+      { label: "Annualized", num: 1, get: (r) => (r.available && r.twrAnnualized != null ? pct(r.twrAnnualized) : "—"), raw: (r) => r.twrAnnualized },
+      { label: "Money-weighted", num: 1, get: (r) => (r.available ? pct(r.mwr) : "—"), raw: (r) => (r.available ? r.mwr : null) },
+      { label: "Gain", num: 1, get: (r) => (r.available ? usd(r.gain) : "—"), raw: (r) => (r.available ? r.gain : null) },
+      { label: "Income", num: 1, get: (r) => (r.available ? usd(r.income) : "—") },
+      { label: "", get: (r) => (r.available ? "" : h("span", { class: "muted" }, isoToUs(r.reason))) },
+    ], windowsOf(A).map((r) => ({ ...r, _class: r.key === w.key ? "sum" : null }))));
 
     s.append(section("Growth of $1", "Your account's time-weighted path at each statement date, against total-return benchmarks."));
     const { box, canvas } = chartBox(320);
@@ -128,7 +200,7 @@
     // map foot keys
     const foot = s.querySelector("tfoot tr");
     if (foot) { const cells = foot.children; const vals = ["Total", "", usd(P.netContributions), usd(P.income), usd(P.interest), usd(P.realized), usd(P.unrealized), usd(P.totalGain), "", pct(P.twr)]; vals.forEach((v, i) => { cells[i].textContent = v; cells[i].classList.toggle("neg", String(v).startsWith("−")); }); }
-    if (P.periods.some((x) => x.flowHeavy)) s.append(h("p", { class: "note" }, "* The account was nearly empty on 1/1 and was funded during this period, so its return is a cash-flow-weighted estimate (Modified Dietz) rather than a statement-to-statement figure. Uploading the January–March month-end values (Upload page → Add a statement value) splits it into exact months."));
+    if (P.periods.some((x) => x.flowHeavy) || windowsOf(A).some((x) => x.estimated)) s.append(h("p", { class: "note" }, "* The account was nearly empty on 1/1 and was funded during this period, so its return is a cash-flow-weighted estimate (Modified Dietz) rather than a statement-to-statement figure. Uploading the January–March month-end values (Upload page → Add a statement value) splits it into exact months."));
 
     s.append(section("Where the gain came from"));
     const { box: b2, canvas: c2 } = chartBox(220);
@@ -139,20 +211,23 @@
         datasets: [{ data: [P.income, P.interest, P.realized, P.unrealized, P.totalGain], backgroundColor: [C.green, C.red, P.realized < 0 ? C.red : C.green, P.unrealized < 0 ? C.red : C.green, C.gold] }] },
       options: { indexAxis: "y", responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => usd(c.raw) } } }, scales: { x: { ticks: { callback: moneyTick } } } },
     });
-    s.append(h("p", { class: "note" }, `Distributions of ${usd(P.income)} carried the year. Price movement was ${usd(P.marketChange)}, of which ${usd(P.realized)} is locked in as realized losses (largely tax-loss harvesting) and ${usd(P.unrealized)} is still unrealized in current holdings.`));
+    s.append(h("p", { class: "note" }, `Over this period, distributions brought in ${usd(P.income)} and margin interest cost ${usd(-P.interest)}. Price movement was ${usd(P.marketChange)}: ${usd(P.realized)} realized from sales and ${usd(P.unrealized)} unrealized in holdings.`));
     root.replaceChildren(s);
   }
 
   /* ================= GAINS & LOSSES ================= */
   function renderGains(root, A) {
-    const P = A.performance, pos = A.positions;
-    const years = Object.keys(A.realized).sort();
-    const R = A.realized[years[years.length - 1]];
+    const rerender = () => renderGains(root, A);
+    const w = pickWindow(A, "perf");
+    if (!w) return unavailable(root, "Gains & losses", A, "perf", rerender);
+    const P = perfView(A, w), pos = A.positions;
+    const R = realizedView(A, w.start, w.end);
     const s = sheet("Gains & losses", "Dollar results: what you made, how much is realized and what's still open in current positions.");
+    s.append(periodBar(A, "perf", rerender));
     s.append(kpis([
-      { label: "Total gain", value: usd(P.totalGain), sub: `on ~${usd(P.avgCapital)} average capital`, lead: true },
-      { label: "Realized (net)", value: usd(R ? R.net : 0), sub: R ? `${usd(R.gains)} gains, ${usd(R.losses)} losses` : "" },
-      { label: "Unrealized", value: usd(pos ? sum(pos.holdings, (x) => x.gain) : P.unrealized), sub: pos ? `as of ${fmtDate(pos.asOf)}` : "" },
+      { label: `Gain, ${P.label}`, value: usd(P.totalGain), sub: `${fmtDate(P.start)} – ${fmtDate(P.end)}`, lead: true },
+      { label: "Realized (net)", value: usd(R.net), sub: `${usd(R.gains)} gains, ${usd(R.losses)} losses` },
+      { label: "Change in unrealized", value: usd(P.unrealized), sub: pos ? `open gain today ${usd(sum(pos.holdings, (x) => x.gain))}` : "" },
       { label: "Income received", value: usd(P.income), sub: "distributions and interest" },
       { label: "Margin interest", value: usd(P.interest), sub: "paid on the loan" },
     ]));
@@ -215,48 +290,60 @@
       });
     }
 
-    if (R) {
-      s.append(section(`Realized gains and losses by fund, ${years[years.length - 1]}`, "Includes funds that have since been sold."));
-      s.append(table([
-        { label: "Fund", get: (r) => h("span", {}, h("strong", {}, r.symbol), " ", h("span", { class: "muted" }, r.name)) },
-        { label: "Lots", num: 1, get: (r) => r.lots },
-        { label: "Proceeds", num: 1, get: (r) => usd(r.proceeds) },
-        { label: "Cost", num: 1, get: (r) => usd(r.cost) },
-        { label: "Gain / loss", num: 1, get: (r) => usd(r.gain), raw: (r) => r.gain },
-        { label: "Wash-sale lots", num: 1, get: (r) => r.washLots || "" },
-        { label: "Loss deferred", num: 1, get: (r) => (r.disallowed ? usd(r.disallowed) : "") },
-      ], R.bySymbol));
-    }
+    s.append(section(`Realized gains and losses by fund, ${P.label}`, R.count ? `${R.count} lots closed ${fmtDate(P.start)} – ${fmtDate(P.end)}, including funds since sold.` : "No sales closed in this period."));
+    if (R.count) s.append(table([
+      { label: "Fund", get: (r) => h("span", {}, h("strong", {}, r.symbol), " ", h("span", { class: "muted" }, r.name)) },
+      { label: "Lots", num: 1, get: (r) => r.lots },
+      { label: "Proceeds", num: 1, get: (r) => usd(r.proceeds) },
+      { label: "Cost", num: 1, get: (r) => usd(r.cost) },
+      { label: "Gain / loss", num: 1, get: (r) => usd(r.gain), raw: (r) => r.gain },
+      { label: "Wash-sale lots", num: 1, get: (r) => r.washLots || "" },
+      { label: "Loss deferred", num: 1, get: (r) => (r.disallowed ? usd(r.disallowed) : "") },
+    ], R.bySymbol));
     root.replaceChildren(s);
   }
 
   /* ================= INCOME ================= */
   function renderIncome(root, A) {
-    const I = A.income;
-    const months = I.byMonth.filter((m) => m.month >= (A.performance.start || "").slice(0, 7));
-    const cats = [...new Set(months.flatMap((m) => Object.keys(m).filter((k) => k !== "month" && k !== "total")))];
-    const year = (A.performance.end || "").slice(0, 4);
-    const ytd = sum(months.filter((m) => m.month.startsWith(year)), (m) => m.total);
-    const interestYtd = sum(I.interestByMonth.filter((m) => m.month.startsWith(year)), (m) => m.interest);
-    const last3 = months.slice(-4, -1);
+    const rerender = () => renderIncome(root, A);
+    const w = pickWindow(A, "cash");
+    if (!w) return unavailable(root, "Income", A, "cash", rerender);
+    const from = w.cashStart, to = w.end;
+    const items = A.income.items.filter((x) => x.d > from && x.d <= to);
+    const inc = items.filter((x) => x.k !== "Margin interest");
+    const total = sum(inc, (x) => x.a), interestPaid = sum(items.filter((x) => x.k === "Margin interest"), (x) => x.a);
+    const monthsSpan = Math.max(1, (new Date(to) - new Date(from)) / (30.4375 * 864e5));
+    const byMonth = {};
+    inc.forEach((x) => { const m = x.d.slice(0, 7); byMonth[m] = byMonth[m] || {}; byMonth[m][x.k] = (byMonth[m][x.k] || 0) + x.a; });
+    const months = Object.keys(byMonth).sort();
+    const cats = [...new Set(inc.map((x) => x.k))];
     const s = sheet("Income", "Distributions and interest received, by month and by tax character as Schwab reports it today. Final character comes on the 1099.");
+    s.append(periodBar(A, "cash", rerender));
     s.append(kpis([
-      { label: `${year} income to date`, value: usd(ytd), lead: true },
-      { label: "Margin interest paid", value: usd(interestYtd), sub: year },
-      { label: "Income after margin interest", value: usd(ytd + interestYtd) },
-      { label: "Recent monthly average", value: usd(last3.length ? sum(last3, (m) => m.total) / last3.length : 0), sub: "last 3 full months" },
+      { label: `Income, ${w.label}`, value: usd(total), sub: `${fmtDate(from)} – ${fmtDate(to)}`, lead: true },
+      { label: "Margin interest paid", value: usd(interestPaid) },
+      { label: "Income after margin interest", value: usd(total + interestPaid) },
+      { label: "Monthly average", value: usd(total / monthsSpan), sub: `over ${monthsSpan < 1.5 ? "the period" : Math.round(monthsSpan) + " months"}` },
     ]));
+    if (w.key === "ITD" || w.key === "1Y") s.append(h("p", { class: "note" }, `Income history comes from the transaction file, which starts ${fmtDate(A.income.firstDate)}, before the strip was funded in March 2026.`));
     const palette = [C.green, C.navy, C.gold, C.haze, C.bronze, C.grey, C.sky];
     const { box, canvas } = chartBox(300);
     s.append(section("Income by month"), box);
     draw(canvas, {
       type: "bar",
-      data: { labels: months.map((m) => monthLabel(m.month)), datasets: cats.map((k, i) => ({ label: k, data: months.map((m) => m[k] || 0), backgroundColor: palette[i % palette.length], stack: "i" })) },
+      data: { labels: months.map(monthLabel), datasets: cats.map((k, i) => ({ label: k, data: months.map((m) => byMonth[m][k] || 0), backgroundColor: palette[i % palette.length], stack: "i" })) },
       options: { responsive: true, maintainAspectRatio: false, plugins: { tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${usd(c.raw)}` } } }, scales: { x: { stacked: true }, y: { stacked: true, ticks: { callback: moneyTick } } } },
     });
-    const bySym = I.bySymbol.filter((x) => x.year === year).sort((a, b) => b.amount - a.amount);
-    s.append(section(`Income by fund, ${year}`));
-    s.append(table([{ label: "Fund", get: (r) => r.symbol }, { label: "Received", num: 1, get: (r) => usd(r.amount, 2) }, { label: "Share", num: 1, get: (r) => pct(r.amount / ytd, 1) }], bySym));
+    const bySym = {};
+    inc.forEach((x) => { const k = x.s || "(cash)"; bySym[k] = (bySym[k] || 0) + x.a; });
+    s.append(section(`Income by fund, ${w.label}`));
+    s.append(table([{ label: "Fund", get: (r) => r.symbol }, { label: "Received", num: 1, get: (r) => usd(r.amount, 2) }, { label: "Share", num: 1, get: (r) => pct(total ? r.amount / total : 0, 1) }],
+      Object.entries(bySym).map(([symbol, amount]) => ({ symbol, amount })).sort((a, b) => b.amount - a.amount)));
+    const byChar = {};
+    inc.forEach((x) => { byChar[x.k] = (byChar[x.k] || 0) + x.a; });
+    s.append(section(`Income by tax character, ${w.label}`));
+    s.append(table([{ label: "Character", get: (r) => r.k }, { label: "Amount", num: 1, get: (r) => usd(r.a, 2) }, { label: "Share", num: 1, get: (r) => pct(total ? r.a / total : 0, 1) }],
+      Object.entries(byChar).map(([k, a]) => ({ k, a })).sort((a, b) => b.a - a.a)));
     if (A.positions) {
       const up = A.positions.holdings.filter((x) => x.exDiv || x.payDate).sort((a, b) => (b.exDiv || "").localeCompare(a.exDiv || ""));
       s.append(section("Latest declared distributions", `From the ${fmtDate(A.positions.asOf)} positions export.`));

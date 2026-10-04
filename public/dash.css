@@ -47,3 +47,21 @@ details.lots summary { cursor: pointer; color: #183763; font-weight: 500; }
 .results .msg.ok { color: #1f6b3f; }
 .results .msg.err { color: #b42318; }
 .link-button.dark { color: #183763; font-size: 0.85rem; }
+.periodbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; margin: 0.25rem 0 1.1rem; }
+.periodbar .pb { font: inherit; font-size: 0.85rem; color: #183763; background: #fff; border: 1px solid #c9d4e3; border-radius: 999px; padding: 0.35rem 0.8rem; cursor: pointer; }
+.periodbar .pb:hover:not(:disabled) { border-color: var(--gold); }
+.periodbar .pb.on { background: #0c1c36; border-color: #0c1c36; color: var(--gold); font-weight: 500; }
+.periodbar .pb:disabled { color: #a9b4c6; background: #f3f5f9; border-style: dashed; cursor: not-allowed; }
+.periodbar .pb:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.periodbar .pb-range { font-size: 0.8125rem; color: #5a6b86; margin-left: 0.5rem; }
+.ftypes { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 0.75rem; margin: 0.75rem 0 0.5rem; }
+.ftype { background: #fff; border: 1px solid #e3e9f2; border-radius: 8px; padding: 0.9rem 1rem; font-size: 0.875rem; color: #263753; }
+.ftype h4 { margin: 0 0 0.15rem; font-size: 0.95rem; font-weight: 500; color: #0c1c36; display: flex; justify-content: space-between; gap: 0.5rem; }
+.ftype .tag { flex: none; align-self: flex-start; font-size: 0.72rem; font-weight: 500; padding: 0.1rem 0.5rem; border-radius: 999px; background: #eef2f7; color: #4a5b78; white-space: nowrap; }
+.ftype .tag.req { background: #0c1c36; color: var(--gold); }
+.ftype p { margin: 0.35rem 0 0; }
+.ftype .where { color: #4a5b78; }
+.ftype .status { color: #1f6b3f; font-size: 0.8rem; overflow-wrap: anywhere; }
+.ftype .status.none { color: #8a5a00; }
+.ftype code { font-size: 0.78rem; background: #f3f5f9; padding: 0.05rem 0.3rem; border-radius: 4px; }
+#history { margin-top: 1.75rem; }
