@@ -94,13 +94,14 @@
     if (active) active.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
 
-  const workTabs = () => (window.BSWork ? window.BSWork.tabs : []);
+  const propTabs = () => (window.BSProps ? window.BSProps.tabs.map((t) => ({ ...t, render: (r) => window.BSProps.render(t.slug, r) })) : []);
+  const workTabs = () => propTabs().concat(window.BSWork ? window.BSWork.tabs.map((t) => ({ ...t, render: (r) => window.BSWork.render(t.slug, r) })) : []);
 
   function show(slug) {
     const workTab = workTabs().find((t) => t.slug === slug);
     if (workTab) {
       setActive(workTab.slug);
-      try { window.BSWork.render(workTab.slug, reportEl); }
+      try { workTab.render(reportEl); }
       catch (e) { console.error(e); reportEl.replaceChildren(el("p", { class: "report-state" }, "This view couldn't be drawn. Refresh the page to try again.")); }
       document.title = `${workTab.name} | Blue Sky Investment Group`;
       return;
@@ -134,12 +135,13 @@
     return r.ok ? r.json() : null;
   });
 
-  const loadWork = window.BSWork ? Promise.resolve() : new Promise((res) => {
+  const loadScript = (src, ready) => (ready ? Promise.resolve() : new Promise((res) => {
     const sc = document.createElement("script");
-    sc.src = "/workspace.js";
+    sc.src = src;
     sc.onload = res; sc.onerror = res;
     document.head.append(sc);
-  });
+  }));
+  const loadWork = Promise.all([loadScript("/props.js", window.BSProps), loadScript("/workspace.js", window.BSWork)]);
 
   Promise.all([getJson("/api/analytics").catch(() => null), getJson("/api/report").catch(() => null), loadWork])
     .then(([a, r]) => {

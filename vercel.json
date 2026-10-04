@@ -41,6 +41,10 @@
     {
       "source": "/api/fedfunds",
       "destination": "/api/work?r=fedfunds"
+    },
+    {
+      "source": "/api/properties",
+      "destination": "/api/work?r=properties"
     }
   ],
   "headers": [

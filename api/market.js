@@ -37,17 +37,34 @@ export default async function handler(req, res) {
       // Total-return (adjusted close) growth at each requested date.
       const dates = String(req.query.dates || "").split(",").filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
       const symbols = String(req.query.symbols || "SPY,HYG,AGG").split(",").slice(0, 6).map(sym);
+      const withPrice = req.query.price === "1";
       if (dates.length < 2) return res.status(400).json({ error: "Need at least two dates." });
+      if (dates.length > 400) return res.status(400).json({ error: "Too many dates." });
       const from = new Date(Date.parse(dates[0]) - 10 * 864e5).toISOString().slice(0, 10);
       const to = dates[dates.length - 1];
-      const out = {};
+      const out = {}, price = {};
       for (const s of symbols) {
         const rows = await eod(s, from, to, token);
-        const closeOn = (d) => { let v = null; for (const r of rows) { if (r.date <= d) v = r.adjusted_close; else break; } return v; };
-        const base = closeOn(dates[0]);
-        out[s] = dates.map((d) => { const c = closeOn(d); return base && c ? c / base : null; });
+        const on = (d, k) => { let v = null; for (const r of rows) { if (r.date <= d) v = r[k]; else break; } return v; };
+        const base = on(dates[0], "adjusted_close");
+        out[s] = dates.map((d) => { const c = on(d, "adjusted_close"); return base && c ? c / base : null; });
+        if (withPrice) { const pb = on(dates[0], "close"); price[s] = dates.map((d) => { const c = on(d, "close"); return pb && c ? c / pb : null; }); }
       }
-      return res.status(200).json({ connected: true, dates, series: out });
+      return res.status(200).json({ connected: true, dates, series: out, ...(withPrice ? { price } : {}) });
+    }
+    if (kind === "lookup") {
+      // Confirms a ticker exists on a US exchange and returns its name.
+      const q = String(req.query.symbol || "").trim().toUpperCase().replace(/\.US$/, "");
+      if (!/^[A-Z][A-Z0-9-]{0,9}$/.test(q)) return res.status(200).json({ connected: true, found: false });
+      const list = await cached(`s|${q}`, TTL.eod, async () => {
+        const r = await fetch(`${BASE}/search/${encodeURIComponent(q)}?api_token=${token}&fmt=json&limit=15`);
+        if (!r.ok) throw new Error(`EODHD ${r.status}`);
+        return r.json();
+      });
+      const us = new Set(["US", "NYSE", "NASDAQ", "NYSE ARCA", "BATS", "AMEX", "NYSE MKT"]);
+      const hit = (Array.isArray(list) ? list : []).find((x) => String(x.Code).toUpperCase() === q && (us.has(String(x.Exchange).toUpperCase()) || String(x.Country) === "USA"));
+      if (!hit) return res.status(200).json({ connected: true, found: false });
+      return res.status(200).json({ connected: true, found: true, symbol: q, name: hit.Name, type: hit.Type, exchange: hit.Exchange });
     }
     if (kind === "quotes") {
       const symbols = String(req.query.symbols || "").split(",").filter(Boolean).slice(0, 15).map(sym);
