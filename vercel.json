@@ -45,6 +45,10 @@
     {
       "source": "/api/properties",
       "destination": "/api/work?r=properties"
+    },
+    {
+      "source": "/api/ai",
+      "destination": "/api/work?r=ai"
     }
   ],
   "headers": [
@@ -79,5 +83,10 @@
       "path": "/api/work?r=fedfunds",
       "schedule": "0 13 * * *"
     }
-  ]
+  ],
+  "functions": {
+    "api/work.js": {
+      "maxDuration": 300
+    }
+  }
 }
