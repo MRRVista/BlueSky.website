@@ -2,7 +2,7 @@ import { getSession } from "../lib/auth.js";
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-function shell({ title, email, body, script = "" }) {
+function shell({ title, email, body, script = "", variant = "" }) {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -15,9 +15,10 @@ function shell({ title, email, body, script = "" }) {
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/report.css">
 </head>
 <body>
-  <div class="sky">
+  <div class="sky${variant ? " sky--" + variant : ""}">
     <header class="topbar">
       <a href="/home" aria-label="Blue Sky Investment Group home"><img class="logo logo--small" src="/logo.webp" alt="Blue Sky Investment Group LLC" width="479" height="340"></a>
       <nav aria-label="Account">
@@ -43,12 +44,14 @@ function shell({ title, email, body, script = "" }) {
 
 function homePage(email) {
   return shell({
-    title: "Under construction",
+    title: "5100 Main Equity Strip",
     email,
-    body: `<main class="construction">
-      <h1>Under construction</h1>
-      <p>The new Blue Sky Investment Group site is being built. Check back soon.</p>
+    variant: "report",
+    body: `<nav class="tabs" id="tabs" aria-label="Report tabs"></nav>
+    <main class="report" id="report" style="display:block;text-align:left;max-width:82rem">
+      <p class="report-state">Loading the report…</p>
     </main>`,
+    script: `<script src="/report.js" defer></script>`,
   });
 }
 
