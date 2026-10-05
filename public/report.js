@@ -94,8 +94,9 @@
     if (active) active.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
 
+  const aiTabs = () => (window.BSAI ? window.BSAI.tabs.map((t) => ({ ...t, render: (r) => window.BSAI.render(t.slug, r) })) : []);
   const propTabs = () => (window.BSProps ? window.BSProps.tabs.map((t) => ({ ...t, render: (r) => window.BSProps.render(t.slug, r) })) : []);
-  const workTabs = () => propTabs().concat(window.BSWork ? window.BSWork.tabs.map((t) => ({ ...t, render: (r) => window.BSWork.render(t.slug, r) })) : []);
+  const workTabs = () => aiTabs().concat(propTabs()).concat(window.BSWork ? window.BSWork.tabs.map((t) => ({ ...t, render: (r) => window.BSWork.render(t.slug, r) })) : []);
 
   function show(slug) {
     const workTab = workTabs().find((t) => t.slug === slug);
@@ -141,7 +142,14 @@
     sc.onload = res; sc.onerror = res;
     document.head.append(sc);
   }));
-  const loadWork = Promise.all([loadScript("/props.js", window.BSProps), loadScript("/workspace.js", window.BSWork)]);
+  const loadWork = Promise.all([loadScript("/props.js", window.BSProps), loadScript("/workspace.js", window.BSWork), loadScript("/ai.js", window.BSAI)]);
+
+  // The AI Assistant saved something: reload the data behind the affected tabs.
+  window.addEventListener("bs:data-changed", (e) => {
+    const what = e.detail || [];
+    if (what.includes("portfolio")) getJson("/api/analytics").then((a) => { if (a) analytics = a; }).catch(() => {});
+    if (what.includes("properties") && window.BSProps) window.BSProps.load(true).catch(() => {});
+  });
 
   Promise.all([getJson("/api/analytics").catch(() => null), getJson("/api/report").catch(() => null), loadWork])
     .then(([a, r]) => {
