@@ -288,6 +288,21 @@
     return p;
   }
 
+  /* ---------- margin rate (Loans tab, else recent margin interest) ---------- */
+  let marginRateP = null;
+  function marginRate(A) {
+    if (!marginRateP) marginRateP = fetch("/api/loans", { credentials: "same-origin" }).then((r) => (r.ok ? r.json() : null)).catch(() => null).then((L) => {
+      const row = L && (L.rows || []).find((x) => x.kind === "margin" && x.status === "open" && x.rate != null);
+      if (row) return { rate: row.rate, source: "margin rate from the Loans tab" };
+      const pos = A.positions, cut = addDaysIso(A.performance.end || new Date().toISOString().slice(0, 10), -92);
+      const paid = -sum(A.income.items.filter((x) => x.k === "Margin interest" && x.d > cut), (x) => x.a);
+      if (pos && pos.margin > 0 && paid > 0) return { rate: (paid / pos.margin) * (365 / 92) * 100, source: "rate implied by the last 3 months of margin interest" };
+      const b = bmCfg(A);
+      return { rate: Number(b.borrowRate) || 6, source: b.borrowRate ? "benchmark borrowing rate (no margin loan on the Loans tab)" : "assumed 6%" };
+    });
+    return marginRateP;
+  }
+
   /* ---------- benchmark proxy (blend of index ETFs, total return) ---------- */
   let bmDraft = null; // unsaved edits in this browser session
   const bmCache = {};
@@ -297,6 +312,8 @@
     const mix = cfg.components.map((c) => `${+c.weight}% ${name(c)}`).join(" / ");
     return cfg.leverage && cfg.leverage !== 1 ? `${mix}, ${cfg.leverage}× levered` : mix;
   };
+  const bmShort = (cfg) => cfg.components.map((c) => `${+c.weight}% ${c.symbol}`).join(" / ") + (cfg.leverage && cfg.leverage !== 1 ? `, ${cfg.leverage}×` : "");
+  let bmParts = (() => { try { return sessionStorage.getItem("bs-bm-parts") === "1"; } catch { return false; } })();
   function bmFetch(A, symbols) {
     const dates = A.performance.series.map((x) => x.date).join(",");
     const key = symbols.slice().sort().join(",") + "|" + dates;
@@ -492,6 +509,12 @@
     if (bmDraft) det.open = true;
     s.append(det);
     if (isSaved && saved.savedBy) s.append(h("p", { class: "note" }, `Saved by ${saved.savedBy} on ${fmtDate(String(saved.savedAt || "").slice(0, 10))}. Apply tries a blend in this browser only; Save as default changes it for everyone.`));
+    const partsBtn = cfg.components.length > 1 ? h("button", { type: "button", class: "btn-small ghost bm-parts", "aria-pressed": bmParts ? "true" : "false" }) : null;
+    const paintParts = () => { if (partsBtn) { partsBtn.textContent = bmParts ? "Hide underlying ETFs" : `Show underlying ETFs (${cfg.components.map((c) => c.symbol).join(", ")})`; partsBtn.setAttribute("aria-pressed", bmParts ? "true" : "false"); } };
+    paintParts();
+    if (partsBtn) s.append(h("div", { class: "toolbar" }, partsBtn));
+    const showParts = () => { if (!chart) return; chart.data.datasets.forEach((d) => { if (d.part) d.hidden = !bmParts; }); chart.update(); };
+    if (partsBtn) partsBtn.addEventListener("click", () => { bmParts = !bmParts; try { sessionStorage.setItem("bs-bm-parts", bmParts ? "1" : "0"); } catch {} paintParts(); showParts(); });
 
     const kp = h("div");
     s.append(kp);
@@ -508,7 +531,8 @@
       type: "line", data: { labels, datasets: [{ label: "Blue Sky account (TWR)", data: P.series.map((x) => x.growth), borderColor: C.gold, backgroundColor: C.gold, borderWidth: 3, tension: 0.2, pointRadius: 3 }] },
       options: { responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
         scales: { y: { ticks: { callback: (v) => "$" + Number(v).toFixed(2) } } },
-        plugins: { tooltip: { callbacks: { label: (c) => (c.raw == null ? `${c.dataset.label}: —` : `${c.dataset.label}: $${Number(c.raw).toFixed(3)} (${pct(c.raw - 1)})`) } } } },
+        plugins: { legend: { labels: { filter: (item, d) => !d.datasets[item.datasetIndex].part || !d.datasets[item.datasetIndex].hidden }, onClick: (e, item, legend) => { const ds = legend.chart.data.datasets[item.datasetIndex]; if (ds.part) return; Chart.defaults.plugins.legend.onClick.call(legend, e, item, legend); } },
+          tooltip: { callbacks: { label: (c) => (c.raw == null ? `${c.dataset.label}: —` : `${c.dataset.label}: $${Number(c.raw).toFixed(3)} (${pct(c.raw - 1)})`) } } } },
     });
 
     bmFetch(A, cfg.components.map((c) => c.symbol)).then((m) => {
@@ -518,11 +542,12 @@
       const si = w.startIndex, ei = w.endIndex ?? full.length - 1, base = full[si];
       const win = full.slice(si, ei + 1).map((g) => (g == null || base == null ? null : g / base));
       if (chart) {
-        chart.data.datasets.push({ label: `Benchmark: ${bmLabel(A, cfg)}`, data: win, borderColor: C.navy, backgroundColor: C.navy, borderWidth: 2.5, borderDash: [6, 4], tension: 0.2, pointRadius: 2 });
+        chart.data.datasets.push({ label: `Benchmark (${bmShort(cfg)})`, data: win, borderColor: C.navy, backgroundColor: C.navy, borderWidth: 2.5, borderDash: [6, 4], tension: 0.2, pointRadius: 2 });
         if (cfg.components.length > 1) cfg.components.forEach((c, i) => {
           const ser = m.series[`${c.symbol}.US`];
           if (!ser || ser[si] == null) return;
-          chart.data.datasets.push({ label: `${c.symbol} alone`, data: ser.slice(si, ei + 1).map((v) => (v == null ? null : v / ser[si])), borderColor: [C.haze, C.grey, C.sky, C.bronze, C.green, C.red][i % 6], borderWidth: 1, tension: 0.2, pointRadius: 0, hidden: true });
+          const col = [C.green, C.bronze, C.sky, C.red, C.haze, C.grey][i % 6];
+          chart.data.datasets.push({ label: `${c.symbol} alone`, part: true, data: ser.slice(si, ei + 1).map((v) => (v == null ? null : v / ser[si])), borderColor: col, backgroundColor: col, borderWidth: 1.5, borderDash: [2, 3], tension: 0.2, pointRadius: 0, hidden: !bmParts });
         });
         chart.update();
       }
@@ -534,7 +559,7 @@
         { label: `Benchmark, ${P.label}`, value: pct(bRet), sub: long ? `${pct(ann(bRet, P.days))} annualized` : `cumulative over ${P.days} days` },
         { label: "Account vs benchmark", value: bRet == null ? "—" : (P.twr - bRet >= 0 ? "+" : "") + pct(P.twr - bRet), sub: "percentage points", lead: true },
       ]));
-      bnote.textContent = `Benchmark: ${bmLabel(A, cfg)}${cfg.leverage && cfg.leverage !== 1 ? `, borrowing at ${cfg.borrowRate}%` : ""}. Single indices are in the legend; click one to show it.${P.estimated ? " The account's first period is an estimate (see note below)." : ""}`;
+      bnote.textContent = `Benchmark: ${bmLabel(A, cfg)}${cfg.leverage && cfg.leverage !== 1 ? `, borrowing at ${cfg.borrowRate}%` : ""}. ${cfg.components.length > 1 ? " Use the button above the chart to show each ETF on its own." : ""}${P.estimated ? " The account's first period is an estimate (see note below)." : ""}`;
 
       const rows = windowsOf(A).filter((x) => x.available).map((x) => {
         const b0 = full[x.startIndex], b1 = full[x.endIndex ?? full.length - 1];
@@ -836,8 +861,30 @@
       const status = h("span", { class: "note inline" }, "");
       sec.append(h("div", { class: "toolbar" }, btn, status));
       s.append(sec);
+      const incomeBox = h("div");
       const holder = h("div");
-      s.append(holder);
+      s.append(incomeBox, holder);
+      let rateInfo = null, lastRows = null;
+      const t12 = addDaysIso(A.performance.end || pos.asOf, -365);
+      const recv = sum(A.income.items.filter((x) => x.k !== "Margin interest" && x.d > t12), (x) => x.a);
+      const paidInt = -sum(A.income.items.filter((x) => x.k === "Margin interest" && x.d > t12), (x) => x.a);
+      const firstD = A.income.items.map((x) => x.d).filter((d) => d > t12).sort()[0];
+      const spanMo = firstD ? Math.max(1, Math.round(dayDiff(firstD, A.performance.end || pos.asOf) / 30.44)) : 12;
+      const paintIncome = () => {
+        if (!lastRows) return;
+        const gross = sum(lastRows, (r) => r.liveMV * (r.yield || 0));
+        const mi = rateInfo ? (pos.margin * rateInfo.rate) / 100 * (365 / 360) : null;
+        incomeBox.replaceChildren(
+          h("h4", { class: "inc-head" }, "Estimated annual account income"),
+          kpis([
+            { label: "Income, gross", value: usd(gross), sub: `${pct(gross / sum(lastRows, (r) => r.liveMV))} on ${usd(sum(lastRows, (r) => r.liveMV))} of holdings`, lead: true },
+            { label: "Margin interest", value: mi == null ? "…" : usd(-mi), sub: rateInfo ? `${usd(pos.margin)} at ${rateInfo.rate.toFixed(2)}%` : "loading rate" },
+            { label: "Income, net of margin interest", value: mi == null ? "…" : usd(gross - mi), sub: mi == null ? "" : `${pct((gross - mi) / pos.net)} on ${usd(pos.net)} of net equity` },
+            { label: `Received, last ${spanMo < 12 ? `${spanMo} months` : "12 months"}`, value: usd(recv - paidInt), sub: `${usd(recv)} income less ${usd(paidInt)} margin interest` },
+          ]),
+          h("p", { class: "note" }, `Estimates use each fund's current yield on today's market value${rateInfo ? ` and the ${rateInfo.source}` : ""}. Schwab charges margin interest on a 360-day year. Distributions vary month to month.`));
+      };
+      marginRate(A).then((x) => { rateInfo = x; paintIncome(); });
       const renderHoldings = (quotes) => {
         const rows = pos.holdings.map((x) => {
           const q = quotes && quotes[x.symbol];
@@ -845,6 +892,8 @@
           const mv = q ? price * x.quantity : x.marketValue;
           return { ...x, livePrice: price, liveMV: mv, liveGain: mv - x.costBasis, chg: q ? q.changePct / 100 : null };
         }).sort((a, b) => b.liveMV - a.liveMV);
+        lastRows = rows;
+        const tMV = sum(rows, (r) => r.liveMV), tCost = sum(rows, (r) => r.costBasis), tGain = sum(rows, (r) => r.liveGain), tInc = sum(rows, (r) => r.liveMV * (r.yield || 0));
         holder.replaceChildren(table([
           { label: "Fund", get: (r) => h("span", {}, h("strong", {}, r.symbol), " ", h("span", { class: "muted" }, r.description)) },
           { label: "Shares", num: 1, get: (r) => r.quantity.toLocaleString("en-US", { maximumFractionDigits: 2 }) },
@@ -855,10 +904,11 @@
           { label: "Unrealized", num: 1, get: (r) => usd(r.liveGain), raw: (r) => r.liveGain },
           { label: "Unrealized %", num: 1, get: (r) => pct(r.liveGain / r.costBasis), raw: (r) => r.liveGain },
           { label: "Yield", num: 1, get: (r) => pct(r.yield) },
-          { label: "Est. income / yr", num: 1, get: (r) => usd(r.annualIncome) },
-        ], rows, {}));
-        const tg = sum(rows, (r) => r.liveGain), mv = sum(rows, (r) => r.liveMV);
-        holder.append(h("p", { class: "note" }, `Total market value ${usd(mv)}, unrealized ${usd(tg)}, estimated annual income ${usd(sum(rows, (r) => r.annualIncome))} at current yields.`));
+          { label: "Est. income / yr", num: 1, get: (r) => usd(r.liveMV * (r.yield || 0)) },
+        ], rows.concat([{ _class: "sum", total: true }]).map((r) => r.total ? { ...r, symbol: "Total", description: `${rows.length} holdings`, quantity: 0, livePrice: 0, chg: null, liveMV: tMV, costBasis: tCost, liveGain: tGain, yield: tInc / tMV } : r), {}));
+        const totRow = holder.querySelector("tr.sum");
+        if (totRow) { const c = totRow.children; c[1].textContent = ""; c[2].textContent = ""; c[3].textContent = ""; }
+        paintIncome();
       };
       renderHoldings(null);
       btn.addEventListener("click", async () => {
