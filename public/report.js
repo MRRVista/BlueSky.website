@@ -90,9 +90,70 @@
       if (a.dataset.slug === slug) a.setAttribute("aria-current", "page");
       else a.removeAttribute("aria-current");
     });
-    const active = tabsEl.querySelector('[aria-current="page"]');
+    let active = tabsEl.querySelector('[aria-current="page"]');
+    const otherBtn = tabsEl.querySelector(".tab-more");
+    if (otherBtn) {
+      const inOther = otherItems.some((o) => o.slug === slug);
+      otherBtn.classList.toggle("on", inOther);
+      const item = otherItems.find((o) => o.slug === slug);
+      otherBtn.querySelector(".tab-more-sel").textContent = item ? `: ${item.name}` : "";
+      if (inOther) active = otherBtn;
+    }
     if (active) active.scrollIntoView({ block: "nearest", inline: "nearest" });
+    closeMenu();
   }
+
+  /* ---------- "Other" dropdown (workbook tabs and workspace lists) ---------- */
+  // Order as requested; workbook sheets are matched by name so a renamed slug still lands here.
+  const OTHER = [
+    { match: (n) => n === "Statement Log" },
+    { match: (n) => n === "Assumptions" },
+    { match: (n) => /^Forecast/i.test(n), label: "Forecast Model" },
+    { match: (n) => n === "Loan & Closing" },
+    { match: (n) => n === "Schwab Tracker" },
+    { match: (n) => /^Matt/i.test(n) },
+    { match: (n) => /^Real #/i.test(n) },
+    { work: "discussion" },
+    { work: "watch" },
+  ];
+  let otherItems = [];
+  let menu = null, menuY = 0;
+  function closeMenu() {
+    if (!menu) return;
+    menu.remove(); menu = null;
+    const b = tabsEl.querySelector(".tab-more");
+    if (b) b.setAttribute("aria-expanded", "false");
+  }
+  function openMenu(btn) {
+    closeMenu();
+    menu = el("ul", { class: "tab-menu", role: "menu", id: "other-menu" });
+    const current = decodeURIComponent(location.hash.replace(/^#/, ""));
+    otherItems.forEach((o) => {
+      const li = el("li", { role: "none" });
+      const a = el("a", { href: `#${o.slug}`, role: "menuitem", "data-slug": o.slug }, o.name);
+      if (o.slug === current) a.setAttribute("aria-current", "page");
+      a.addEventListener("click", () => closeMenu());
+      li.append(a); menu.append(li);
+    });
+    const r = btn.getBoundingClientRect();
+    menu.style.top = `${Math.round(r.bottom)}px`;
+    menu.style.left = `${Math.round(Math.max(8, Math.min(r.left, window.innerWidth - 248)))}px`;
+    document.body.append(menu);
+    menuY = window.scrollY;
+    btn.setAttribute("aria-expanded", "true");
+    const first = menu.querySelector("a");
+    if (first) first.focus();
+    menu.addEventListener("keydown", (e) => {
+      const links = [...menu.querySelectorAll("a")], i = links.indexOf(document.activeElement);
+      if (e.key === "ArrowDown") { e.preventDefault(); links[(i + 1) % links.length].focus(); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); links[(i - 1 + links.length) % links.length].focus(); }
+      else if (e.key === "Escape") { e.preventDefault(); closeMenu(); btn.focus(); }
+      else if (e.key === "Tab") closeMenu();
+    });
+  }
+  document.addEventListener("click", (e) => { if (menu && !menu.contains(e.target) && !e.target.closest(".tab-more")) closeMenu(); });
+  window.addEventListener("resize", closeMenu);
+  window.addEventListener("scroll", () => { if (menu && Math.abs(window.scrollY - menuY) > 24) closeMenu(); }, { passive: true });
 
   const aiTabs = () => (window.BSAI ? window.BSAI.tabs.map((t) => ({ ...t, render: (r) => window.BSAI.render(t.slug, r) })) : []);
   const propTabs = () => (window.BSProps ? window.BSProps.tabs.map((t) => ({ ...t, render: (r) => window.BSProps.render(t.slug, r) })) : []);
@@ -109,6 +170,8 @@
     }
     const replaced = workTabs().find((t) => t.replaces === slug);
     if (replaced) { location.replace(`#${replaced.slug}`); return; }
+    const alias = window.BSDash && window.BSDash.aliases && window.BSDash.aliases[slug];
+    if (alias) { location.replace(`#${alias}`); if (slug === "tax") setTimeout(() => { const t = document.getElementById("tax"); if (t) t.scrollIntoView(); }, 300); return; }
     const dashTab = analytics && window.BSDash && window.BSDash.tabs.find((t) => t.slug === slug);
     if (dashTab || (!slug && analytics && window.BSDash)) {
       const t = dashTab || window.BSDash.tabs[0];
@@ -158,27 +221,30 @@
       if (!analytics && !data && !workTabs().length) throw new Error("load failed");
       const ul = el("ul");
       const hidden = new Set(workTabs().map((t) => t.replaces).filter(Boolean));
-      if (analytics && window.BSDash) {
-        window.BSDash.tabs.forEach((t) => {
-          const li = el("li");
-          li.append(el("a", { href: `#${t.slug}`, "data-slug": t.slug }, t.name));
-          ul.append(li);
-        });
+      const addTab = (slug, name) => { const li = el("li"); li.append(el("a", { href: `#${slug}`, "data-slug": slug }, name)); ul.append(li); };
+      const sheets = data ? data.sheets.filter((s) => !hidden.has(s.slug)) : [];
+      const works = workTabs();
+      otherItems = [];
+      const inOther = new Set();
+      OTHER.forEach((o) => {
+        if (o.work) { const t = works.find((x) => x.slug === o.work); if (t) { otherItems.push({ slug: t.slug, name: t.name }); inOther.add(t.slug); } return; }
+        const sh = sheets.find((x) => o.match(x.name));
+        if (sh) { otherItems.push({ slug: sh.slug, name: o.label || sh.name }); inOther.add(sh.slug); }
+      });
+      if (analytics && window.BSDash) window.BSDash.tabs.forEach((t) => addTab(t.slug, t.name));
+      works.filter((t) => !inOther.has(t.slug)).forEach((t) => addTab(t.slug, t.name));
+      if (otherItems.length) {
+        const li = el("li", { class: "tab-more-li" });
+        const btn = el("button", { type: "button", class: "tab-more", "aria-haspopup": "menu", "aria-expanded": "false", "aria-controls": "other-menu" });
+        btn.append(document.createTextNode("Other"), el("span", { class: "tab-more-sel" }), el("span", { class: "tab-caret", "aria-hidden": "true" }, "▾"));
+        btn.addEventListener("click", () => (menu ? closeMenu() : openMenu(btn)));
+        btn.addEventListener("keydown", (e) => { if (e.key === "ArrowDown") { e.preventDefault(); openMenu(btn); } });
+        li.append(btn); ul.append(li);
       }
-      if (workTabs().length) {
-        workTabs().forEach((t) => {
-          const li = el("li");
-          li.append(el("a", { href: `#${t.slug}`, "data-slug": t.slug }, t.name));
-          ul.append(li);
-        });
-      }
-      if (data) {
+      const restSheets = sheets.filter((s) => !inOther.has(s.slug));
+      if (restSheets.length) {
         ul.append(el("li", { class: "tab-sep", "aria-hidden": "true" }));
-        data.sheets.filter((s) => !hidden.has(s.slug)).forEach((s) => {
-          const li = el("li");
-          li.append(el("a", { href: `#${s.slug}`, "data-slug": s.slug }, s.name));
-          ul.append(li);
-        });
+        restSheets.forEach((s) => addTab(s.slug, s.name));
       }
       tabsEl.replaceChildren(ul);
       window.addEventListener("hashchange", () => { route(); window.scrollTo({ top: 0 }); });
