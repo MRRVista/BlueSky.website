@@ -49,6 +49,10 @@
     {
       "source": "/api/ai",
       "destination": "/api/work?r=ai"
+    },
+    {
+      "source": "/api/plan",
+      "destination": "/api/work?r=plan"
     }
   ],
   "headers": [

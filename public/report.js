@@ -157,9 +157,11 @@
 
   const aiTabs = () => (window.BSAI ? window.BSAI.tabs.map((t) => ({ ...t, render: (r) => window.BSAI.render(t.slug, r) })) : []);
   const propTabs = () => (window.BSProps ? window.BSProps.tabs.map((t) => ({ ...t, render: (r) => window.BSProps.render(t.slug, r) })) : []);
-  const workTabs = () => aiTabs().concat(propTabs()).concat(window.BSWork ? window.BSWork.tabs.map((t) => ({ ...t, render: (r) => window.BSWork.render(t.slug, r) })) : []);
+  const wealthTabs = () => (window.BSWealth ? window.BSWealth.tabs.map((t) => ({ ...t, render: (r) => window.BSWealth.render(t.slug, r) })) : []);
+  const workTabs = () => wealthTabs().concat(aiTabs()).concat(propTabs()).concat(window.BSWork ? window.BSWork.tabs.map((t) => ({ ...t, render: (r) => window.BSWork.render(t.slug, r) })) : []);
 
   function show(slug) {
+    if (!slug && window.BSWealth) slug = "overview"; // the Overview is the landing page
     const workTab = workTabs().find((t) => t.slug === slug);
     if (workTab) {
       setActive(workTab.slug);
@@ -205,18 +207,19 @@
     sc.onload = res; sc.onerror = res;
     document.head.append(sc);
   }));
-  const loadWork = Promise.all([loadScript("/props.js", window.BSProps), loadScript("/workspace.js", window.BSWork), loadScript("/ai.js", window.BSAI)]);
+  const loadWork = Promise.all([loadScript("/props.js", window.BSProps), loadScript("/workspace.js", window.BSWork), loadScript("/ai.js", window.BSAI), loadScript("/wealth.js", window.BSWealth)]);
 
   // The AI Assistant saved something: reload the data behind the affected tabs.
   window.addEventListener("bs:data-changed", (e) => {
     const what = e.detail || [];
-    if (what.includes("portfolio")) getJson("/api/analytics").then((a) => { if (a) analytics = a; }).catch(() => {});
+    if (what.includes("portfolio")) getJson("/api/analytics").then((a) => { if (a) { analytics = a; window.BSAnalytics = a; } }).catch(() => {});
     if (what.includes("properties") && window.BSProps) window.BSProps.load(true).catch(() => {});
   });
 
   Promise.all([getJson("/api/analytics").catch(() => null), getJson("/api/report").catch(() => null), loadWork])
     .then(([a, r]) => {
       analytics = a;
+      window.BSAnalytics = a;
       data = r;
       if (!analytics && !data && !workTabs().length) throw new Error("load failed");
       const ul = el("ul");
@@ -231,8 +234,11 @@
         const sh = sheets.find((x) => o.match(x.name));
         if (sh) { otherItems.push({ slug: sh.slug, name: o.label || sh.name }); inOther.add(sh.slug); }
       });
+      const W = (slug) => works.find((t) => t.slug === slug);
+      if (W("overview")) addTab("overview", W("overview").name);
       if (analytics && window.BSDash) window.BSDash.tabs.forEach((t) => addTab(t.slug, t.name));
-      works.filter((t) => !inOther.has(t.slug)).forEach((t) => addTab(t.slug, t.name));
+      if (W("cashflow")) addTab("cashflow", W("cashflow").name);
+      works.filter((t) => !inOther.has(t.slug) && t.slug !== "overview" && t.slug !== "cashflow").forEach((t) => addTab(t.slug, t.name));
       if (otherItems.length) {
         const li = el("li", { class: "tab-more-li" });
         const btn = el("button", { type: "button", class: "tab-more", "aria-haspopup": "menu", "aria-expanded": "false", "aria-controls": "other-menu" });

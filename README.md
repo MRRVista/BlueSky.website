@@ -6,7 +6,7 @@ Blue Sky Investment Group — sign-in page and the 5100 Main Equity Strip report
 | Path | What it is |
 |---|---|
 | `/` | Sign-in page |
-| `/home` | Signed-in home: Performance, Income, AI Assistant, Properties, Documents, Admin, an **Other** menu (Statement Log, Assumptions, Forecast Model, Loan & Closing, Schwab Tracker, Matt's, Real #s 8.24.2026, Discussion Topics, Watch Items), then The Report, Income & Worth It and The Honest Read |
+| `/home` | Signed-in home: Overview (landing page), Performance, Income, Cash Flow, AI Assistant, Properties, Documents, Admin, an **Other** menu (Statement Log, Assumptions, Forecast Model, Loan & Closing, Schwab Tracker, Matt's, Real #s 8.24.2026, Discussion Topics, Watch Items), then The Report, Income & Worth It and The Honest Read |
 | `/upload` | Schwab exports, statement PDFs and the report workbook |
 | `/account` | Change password |
 | `/api/login`, `/api/logout`, `/api/me`, `/api/change-password` | Auth endpoints |
@@ -34,3 +34,9 @@ To refresh after a new workbook: drop the `.xlsx` on the Upload page. `public/wo
 `tools/extract.py <workbook.xlsx> report.json` still produces the same JSON for a manual upload.
 
 Old links `#gains` and `#tax` open the merged Performance and Income tabs.
+
+## Overview and Cash Flow
+`public/wealth.js` combines the Schwab positions (`/api/analytics`), both properties (`/api/properties`) and every Admin-tab loan (`/api/loans`).
+- Property value = NOI ÷ the market cap rate set on the Properties tab (or the entered value). NOI is the ledger's last 12 months, or the pro forma until a year of rent is on file.
+- Loans are tied to assets by their "Secured by" field; a property mortgage entered on the Properties tab is used only when no Admin loan secures that property.
+- The forecaster's assumptions and custom cash flows are shared through `/api/plan` (`data/plan.json`). Tax rates come from the Income tab.

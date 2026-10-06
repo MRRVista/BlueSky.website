@@ -315,6 +315,12 @@
   /* ======================= ADMIN: LOANS & RATES ======================= */
   const KINDS = [["amortizing", "Amortizing loan (mortgage)"], ["margin", "Margin loan"], ["interest-only", "Interest-only loan"], ["line", "Line of credit"]];
   const kindLabel = (k) => (KINDS.find((x) => x[0] === k) || [k, k])[1];
+  const securesOptions = () => {
+    const D = window.BSProps && window.BSProps.data;
+    const props = D ? (D.order || Object.keys(D.properties)).map((id) => [id, D.properties[id].name]) : [["5100-main", "5100 Main"], ["333-chestnut", "333 Chestnut"]];
+    return [["", "Not set"], ["portfolio", "Schwab portfolio (margin)"], ...props, ["other", "Other / unsecured"]];
+  };
+  const securesLabel = (v) => (securesOptions().find((x) => x[0] === v) || [v, ""])[1];
 
   async function renderAdmin(root) {
     loading(root, "Admin");
@@ -408,7 +414,7 @@
       const panel = h("div");
       const showView = () => panel.replaceChildren();
       card.append(
-        h("div", { class: "ws-loan-head" }, h("div", {}, h("h3", {}, l.name), h("div", { class: "muted small" }, [l.lender, kindLabel(l.kind), l.rateType === "floating" ? "Floating rate" : "Fixed rate", l.openedDate ? `opened ${fmtDate(l.openedDate)}` : null].filter(Boolean).join(" · "))),
+        h("div", { class: "ws-loan-head" }, h("div", {}, h("h3", {}, l.name), h("div", { class: "muted small" }, [l.lender, kindLabel(l.kind), l.rateType === "floating" ? "Floating rate" : "Fixed rate", l.openedDate ? `opened ${fmtDate(l.openedDate)}` : null, l.secures ? `secured by ${securesLabel(l.secures)}` : null].filter(Boolean).join(" · "))),
           h("div", { class: "ws-actions" },
             h("button", { class: "btn-small", type: "button", onclick: () => panel.replaceChildren(balanceForm()) }, "Update balance"),
             h("button", { class: "link-button dark", type: "button", onclick: () => panel.replaceChildren(loanForm(l, (loan) => act({ op: "update", id: l.id, loan }, "Saved."), false, showView)) }, "Edit terms"),
@@ -452,6 +458,7 @@
         openedDate: h("input", { type: "date", value: l.openedDate || "" }), escrowMonthly: h("input", { type: "number", step: "0.01", value: l.escrowMonthly ?? "" }),
         paymentOverride: h("input", { type: "number", step: "0.01", value: l.paymentOverride ?? "", placeholder: "Calculated if blank" }),
         autoBalance: h("input", { type: "checkbox" }), notes: h("textarea", { rows: 3 }),
+        secures: select(securesOptions(), l.secures || (l.kind === "margin" ? "portfolio" : "")),
       };
       I.autoBalance.checked = !!l.autoBalance; I.notes.value = l.notes || "";
       const startBal = h("input", { type: "number", step: "0.01" }), startAsOf = h("input", { type: "date", value: today() });
@@ -461,7 +468,8 @@
         wrap("fixedRate", "Fixed rate %"), wrap("spread", "Spread over Fed Funds upper %", "Schwab margin: 0.75"),
         wrap("originalPrincipal", "Original principal $"), wrap("amortMonths", "Amortization (months)", "25 years = 300"),
         wrap("firstPaymentDate", "First payment date"), wrap("maturityDate", "Maturity / balloon date"), wrap("openedDate", "Opened"),
-        wrap("escrowMonthly", "Monthly escrow $", "Taxes and insurance, if escrowed"), wrap("paymentOverride", "Monthly P&I override $"));
+        wrap("escrowMonthly", "Monthly escrow $", "Taxes and insurance, if escrowed"), wrap("paymentOverride", "Monthly P&I override $"),
+        wrap("secures", "Secured by", "Ties the loan to an asset on the Overview and Cash Flow tabs"));
       const autoRow = h("label", { class: "tax-field tax-check" }, I.autoBalance, h("span", {}, "Update the balance automatically from Schwab positions uploads"));
       const startRow = isNew ? h("div", { class: "tax-form", "data-start": "1" }, field("Current balance $", startBal, "For margin, interest-only and credit lines"), field("Balance as of", startAsOf)) : null;
       const sync = () => {
