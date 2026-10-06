@@ -51,7 +51,15 @@
   async function sendFiles(fileList) {
     const all = [...fileList];
     const pdfs = all.filter((f) => /\.pdf$/i.test(f.name) || f.type === "application/pdf");
-    const files = all.filter((f) => !pdfs.includes(f) && (/\.(csv|xlsx|xls)$/i.test(f.name) || f.type === "text/csv"));
+    let files = all.filter((f) => !pdfs.includes(f) && (/\.(csv|xlsx|xls)$/i.test(f.name) || f.type === "text/csv"));
+    // The 5100 Main report workbook goes to the report, not the Schwab importer.
+    const books = [];
+    for (const f of files.filter((x) => /\.xlsx$/i.test(x.name))) {
+      const rep = await readReportBook(f).catch(() => null);
+      if (rep) books.push({ f, rep });
+    }
+    if (books.length) { files = files.filter((f) => !books.some((b) => b.f === f)); books.forEach((b) => saveReportBook(b.f, b.rep)); }
+    if (books.length && !files.length && !pdfs.length) { input.value = ""; return; }
     if (!files.length && !pdfs.length) { results.replaceChildren(h("p", "msg err", "Choose CSV or Excel exports, or statement PDFs, from Schwab.")); return; }
     if (pdfs.length) handlePdfs(pdfs);
     if (!files.length) { input.value = ""; return; }
@@ -63,6 +71,55 @@
     showResults(await post({ files: payload }));
   }
 
+
+  /* ---------- Report workbook: read in the browser, file the .xlsx in Documents, replace the report ---------- */
+  const REPORT_SHEETS = ["The Report", "Statement Log", "Assumptions", "Schwab Tracker", "Forecast to 2031", "Loan & Closing"];
+  const loadJsZip = () => (window.JSZip ? Promise.resolve(window.JSZip) : new Promise((resolve, reject) => {
+    const sc = document.createElement("script");
+    sc.src = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
+    sc.onload = () => resolve(window.JSZip); sc.onerror = () => reject(new Error("zip"));
+    document.head.append(sc);
+  }));
+  async function readReportBook(f) {
+    if (f.size > 25e6) return null;
+    await loadJsZip();
+    const rep = await window.BSWorkbook.extract(await f.arrayBuffer(), f.name);
+    const names = rep.sheets.map((s) => s.name);
+    return REPORT_SHEETS.filter((n) => names.includes(n)).length >= 2 ? rep : null;
+  }
+  async function saveReportBook(f, rep) {
+    const card = el("div", "stmt-card", el("h4", null, f.name), el("p", "note", `Report workbook: ${rep.sheets.length} sheets read. Saving…`));
+    stmts.prepend(card);
+    let docId = null, filed = "";
+    try {
+      const call = async (body) => {
+        const r = await fetch("/api/docs", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || "Couldn't file the workbook.");
+        return d;
+      };
+      const sig = await call({ op: "sign", filename: f.name, size: f.size });
+      const put = await fetch(sig.url, { method: "PUT", headers: { "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }, body: f });
+      if (!put.ok) throw new Error("The workbook didn't upload to Documents.");
+      await call({ op: "commit", id: sig.id, pathname: sig.pathname, filename: f.name, label: `5100 Main report workbook (${f.name})`, category: "Reports & models", docDate: new Date().toISOString().slice(0, 10), notes: "Uploaded on the Upload page; replaced the report tabs." });
+      docId = sig.id; filed = " The workbook is filed in Documents under Reports & models.";
+    } catch (e) { filed = ` (${e.message} The report itself still updates.)`; }
+    const r = await fetch("/api/report", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ report: rep, docId }) });
+    if (r.status === 401) { location.replace("/"); return; }
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { card.replaceChildren(el("h4", null, f.name), el("p", "msg err", d.error || "The report couldn't be saved. Try again.")); return; }
+    card.replaceChildren(el("h4", null, f.name), el("p", "msg ok", `Report updated: ${d.sheets.length} tabs (${d.sheets.join(", ")}). The previous version is kept.${filed}`));
+    loadReportMeta();
+  }
+  async function loadReportMeta() {
+    const st = document.getElementById("st-report");
+    if (!st) return;
+    const r = await fetch("/api/report?meta=1", { credentials: "same-origin" }).catch(() => null);
+    const d = r && r.ok ? await r.json() : null;
+    st.className = "status" + (d ? "" : " none");
+    st.textContent = d ? `On file: ${d.source}, loaded ${fmt(d.generated)}${d.uploadedBy ? ` by ${d.uploadedBy}` : ""}` : "Not uploaded yet";
+  }
+  loadReportMeta();
 
   /* ---------- Statement PDFs: read in the browser, confirm, then save ---------- */
   const stmts = document.getElementById("stmts");
@@ -187,7 +244,7 @@
       el("div", "tax-form",
         el("label", "tax-field", el("span", null, "Statement end date"), dateIn),
         el("label", "tax-field", el("span", null, "Ending account value (net) $"), valIn),
-        el("div", "tax-field", el("span", null, "\u00a0"), el("div", "stmt-btns", save, discard))),
+        el("div", "tax-field", el("span", null, " "), el("div", "stmt-btns", save, discard))),
       msg);
   }
 
