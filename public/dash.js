@@ -1,4 +1,4 @@
-// Blue Sky analytics dashboard: Performance, Gains & Losses, Income, Tax.
+// Blue Sky analytics dashboard: Performance (returns with dollar gains and losses) and Income (gross, taxes and net, with the tax picture).
 (function () {
   const usd = (n, d = 0) => n == null || !isFinite(n) ? "—" : (n < 0 ? "−" : "") + "$" + Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
   const pct = (n, d = 2) => n == null || !isFinite(n) ? "—" : (n < 0 ? "−" : "") + Math.abs(n * 100).toFixed(d) + "%";
@@ -673,23 +673,56 @@
     dlg.showModal();
   }
 
-  /* ================= PERFORMANCE ================= */
+  /* ================= PERFORMANCE (returns and dollar gains & losses on one page) ================= */
   function renderPerformance(root, A) {
     const rerender = () => renderPerformance(root, A);
     const w = pickWindow(A, "perf");
     if (!w) return unavailable(root, "Performance", A, "perf", rerender);
-    const P = perfView(A, w);
+    const P = perfView(A, w), pos = A.positions;
+    const R = realizedView(A, w.start, w.end);
     const long = P.days >= 365;
-    const s = sheet("Performance", `Account …965, ${fmtDate(addDaysIso(P.start, 1))} through ${fmtDate(P.end)}. Returns are measured on net equity, after the margin loan, so they include the effect of leverage.`);
+    if (gLayer !== "portfolio" && window.BSProps && !window.BSProps.data && !propsRequested) {
+      propsRequested = true;
+      window.BSProps.load().then(() => { if (location.hash.replace("#", "") === "performance" || !location.hash) rerender(); }).catch(() => {});
+    }
+    const s = sheet("Performance", `Account …965, ${fmtDate(addDaysIso(P.start, 1))} through ${fmtDate(P.end)}: percentage returns and dollar gains and losses together. Returns are measured on net equity, after the margin loan, so they include the effect of leverage.`);
     s.append(periodBar(A, "perf", rerender));
+    s.append(layerBar(rerender));
     const inote = inceptionNote(A); if (inote) s.append(inote);
     s.append(kpis([
       { label: `Time-weighted return, ${P.label}`, value: pct(P.twr), sub: long ? `${pct(P.twrAnnualized)} annualized` : `cumulative over ${P.days} days`, lead: true },
       { label: `Money-weighted return, ${P.label}`, value: pct(P.mwr), sub: long ? "annualized, on your actual dollars" : `for the period; ${pct(P.mwrAnnualized)} if annualized` },
-      { label: "Gain", value: usd(P.totalGain), sub: "after margin interest" },
-      { label: "Net money added", value: usd(P.netContributions), sub: "deposits less withdrawals" },
+      { label: `Gain, ${P.label}`, value: usd(P.totalGain), sub: "after margin interest", lead: true },
       { label: "Account value", value: usd(P.endValue), sub: `net equity on ${fmtDate(P.end)}` },
+      { label: "Net money added", value: usd(P.netContributions), sub: "deposits less withdrawals" },
     ]));
+    s.append(h("h4", { class: "inc-head" }, "Dollar results"));
+    s.append(kpis([
+      { label: "Income received", value: usd(P.income), sub: "distributions and interest" },
+      { label: "Margin interest", value: usd(P.interest), sub: "paid on the loan" },
+      { label: "Realized (net)", value: usd(R.net), sub: `${usd(R.gains)} gains, ${usd(R.losses)} losses` },
+      { label: "Change in unrealized", value: usd(P.unrealized), sub: pos ? `open gain today ${usd(sum(pos.holdings, (x) => x.gain))}` : "" },
+    ]));
+    const X = propLayer(w.start, w.end);
+    if (X) {
+      const full = gLayer === "full";
+      s.append(section(`Portfolio + ${X.name}, ${P.label}`, full
+        ? "Combined result = portfolio gain + rent − property costs − mortgage interest. Principal is shown separately: it's cash out the door but it pays down the loan, so it isn't a loss. Property net cash is what the building put in or took out of the bank."
+        : "Combined result = portfolio gain + rent received. Choose “+ Rents, costs & mortgage” to net out property costs and the mortgage."));
+      const items = [
+        { label: "Combined result", value: usd(P.totalGain + X.economic), sub: `${fmtDate(addDaysIso(P.start, 1))} – ${fmtDate(P.end)}`, lead: true },
+        { label: "Portfolio gain", value: usd(P.totalGain) },
+        { label: "Rent received", value: usd(X.rent) },
+      ];
+      if (full) items.push(
+        { label: "Property costs", value: usd(-X.costs), sub: "taxes, insurance, repairs, other" },
+        { label: "Mortgage interest", value: usd(-X.interest), sub: X.payment ? `${usd(X.payment)} of payments` : "no mortgage payments in period" },
+        { label: "Principal paid", value: usd(X.principal + X.balloon), sub: "pays down the loan; not a cost" },
+        { label: "Property net cash", value: usd(X.netCash), sub: "rent − costs − mortgage payments" });
+      s.append(kpis(items));
+      if (!X.entries && !X.payment) s.append(h("p", { class: "note" }, `No ${full ? "rent, expenses or mortgage payments" : "rent"} are on file for ${X.name} in this period. Add them on the Properties tab.`));
+    }
+
     s.append(h("div", { class: "explain" },
       h("p", {}, h("strong", {}, "Time-weighted "), "measures the strategy itself. It links each month's return and ignores when money went in or out, so it's the number to compare with a benchmark or a manager's target."),
       h("p", {}, h("strong", {}, "Money-weighted "), "measures what your dollars earned. It counts timing: money added before a down month lowers it. When the two differ, timing of deposits and withdrawals is the reason. Periods under a year are shown as-is, not annualized.")));
@@ -706,30 +739,7 @@
       { label: "", get: (r) => (r.available ? "" : h("span", { class: "muted" }, isoToUs(r.reason))) },
     ], windowsOf(A).map((r) => ({ ...r, _class: r.key === w.key ? "sum" : null }))));
 
-    renderBenchmark(s, A, P, w, rerender);
-
-    s.append(section("Period by period", "Each row runs between two account values. Gain = ending value − beginning value − net deposits."));
-    s.append(table([
-      { label: "Period", get: (r) => `${fmtDate(r.start)} – ${fmtDate(r.end)}${r.flowHeavy ? " *" : ""}` },
-      { label: "Begin", num: 1, get: (r) => usd(r.begin) },
-      { label: "Net deposits", num: 1, get: (r) => usd(r.netFlow), raw: (r) => r.netFlow },
-      { label: "Income", num: 1, get: (r) => usd(r.income) },
-      { label: "Margin interest", num: 1, get: (r) => usd(r.interest), raw: (r) => r.interest },
-      { label: "Realized", num: 1, get: (r) => usd(r.realized), raw: (r) => r.realized },
-      { label: "Unrealized", num: 1, get: (r) => usd(r.unrealized), raw: (r) => r.unrealized },
-      { label: "Gain", num: 1, get: (r) => usd(r.gain), raw: (r) => r.gain },
-      { label: "End", num: 1, get: (r) => usd(r.end_value) },
-      { label: "Return", num: 1, get: (r) => pct(r.ret), raw: (r) => r.ret },
-    ], P.periods, {
-      foot: { label: "Total", netFlow: usd(P.netContributions), income: usd(P.income), interest: usd(P.interest), realized: usd(P.realized), unrealized: usd(P.unrealized), gain: usd(P.totalGain), ret: pct(P.twr) },
-      footRaw: { interest: P.interest, realized: P.realized, gain: P.totalGain, unrealized: P.unrealized },
-    }));
-    // map foot keys
-    const foot = s.querySelector("tfoot tr");
-    if (foot) { const cells = foot.children; const vals = ["Total", "", usd(P.netContributions), usd(P.income), usd(P.interest), usd(P.realized), usd(P.unrealized), usd(P.totalGain), "", pct(P.twr)]; vals.forEach((v, i) => { cells[i].textContent = v; cells[i].classList.toggle("neg", String(v).startsWith("−")); }); }
-    if (P.periods.some((x) => x.flowHeavy) || windowsOf(A).some((x) => x.estimated)) s.append(h("p", { class: "note" }, "* The $1.51M wire on 3/2 landed in the first period (inception to 4/30), so that return is a cash-flow-weighted estimate (Modified Dietz), not statement-to-statement" + (A.inception && A.inception.estimated ? ", and it starts from an estimated 2/28 value" : "") + ". Adding the 3/31 statement value (and the 2/28 value, if missing) on the Upload page makes it exact."));
-
-    s.append(section("Where the gain came from"));
+    s.append(section("Where the gain came from", "The period's dollar gain, split by source."));
     const { box: b2, canvas: c2 } = chartBox(220);
     s.append(b2);
     draw(c2, {
@@ -739,53 +749,11 @@
       options: { indexAxis: "y", responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => usd(c.raw) } } }, scales: { x: { ticks: { callback: moneyTick } } } },
     });
     s.append(h("p", { class: "note" }, `Over this period, distributions brought in ${usd(P.income)} and margin interest cost ${usd(-P.interest)}. Price movement was ${usd(P.marketChange)}: ${usd(P.realized)} realized from sales and ${usd(P.unrealized)} unrealized in holdings.`));
-    root.replaceChildren(s);
-  }
-
-  /* ================= GAINS & LOSSES ================= */
-  function renderGains(root, A) {
-    const rerender = () => renderGains(root, A);
-    const w = pickWindow(A, "perf");
-    if (!w) return unavailable(root, "Gains & losses", A, "perf", rerender);
-    const P = perfView(A, w), pos = A.positions;
-    const R = realizedView(A, w.start, w.end);
-    if (gLayer !== "portfolio" && window.BSProps && !window.BSProps.data && !propsRequested) {
-      propsRequested = true;
-      window.BSProps.load().then(() => { if (location.hash.replace("#", "") === "gains" || !location.hash) rerender(); }).catch(() => {});
-    }
-    const s = sheet("Gains & losses", "Dollar results: what you made, how much is realized and what's still open in current positions.");
-    s.append(periodBar(A, "perf", rerender));
-    s.append(layerBar(rerender));
-    s.append(kpis([
-      { label: `Gain, ${P.label}`, value: usd(P.totalGain), sub: `${fmtDate(addDaysIso(P.start, 1))} – ${fmtDate(P.end)}`, lead: true },
-      { label: "Realized (net)", value: usd(R.net), sub: `${usd(R.gains)} gains, ${usd(R.losses)} losses` },
-      { label: "Change in unrealized", value: usd(P.unrealized), sub: pos ? `open gain today ${usd(sum(pos.holdings, (x) => x.gain))}` : "" },
-      { label: "Income received", value: usd(P.income), sub: "distributions and interest" },
-      { label: "Margin interest", value: usd(P.interest), sub: "paid on the loan" },
-    ]));
-    const X = propLayer(w.start, w.end);
-    if (X) {
-      const full = gLayer === "full";
-      s.append(section(`Portfolio + ${X.name}, ${P.label}`, full
-        ? "Combined result = portfolio gain + rent − property costs − mortgage interest. Principal is shown separately: it's cash out the door but it pays down the loan, so it isn't a loss. Property net cash is what the building put in or took out of the bank."
-        : "Combined result = portfolio gain + rent received. Choose \u201c+ Rents, costs & mortgage\u201d to net out property costs and the mortgage."));
-      const items = [
-        { label: "Combined result", value: usd(P.totalGain + X.economic), sub: `${fmtDate(addDaysIso(P.start, 1))} – ${fmtDate(P.end)}`, lead: true },
-        { label: "Portfolio gain", value: usd(P.totalGain) },
-        { label: "Rent received", value: usd(X.rent) },
-      ];
-      if (full) items.push(
-        { label: "Property costs", value: usd(-X.costs), sub: "taxes, insurance, repairs, other" },
-        { label: "Mortgage interest", value: usd(-X.interest), sub: X.payment ? `${usd(X.payment)} of payments` : "no mortgage payments in period" },
-        { label: "Principal paid", value: usd(X.principal + X.balloon), sub: "pays down the loan; not a cost" },
-        { label: "Property net cash", value: usd(X.netCash), sub: "rent − costs − mortgage payments" });
-      s.append(kpis(items));
-      if (!X.entries && !X.payment) s.append(h("p", { class: "note" }, `No ${full ? "rent, expenses or mortgage payments" : "rent"} are on file for ${X.name} in this period. Add them on the Properties tab.`));
-    }
+    renderBenchmark(s, A, P, w, rerender);
 
     const PM = pmeFor(A, w, () => { if (root.contains(s)) rerender(); });
     const PR = PM.status === "ready" && !PM.res.missing.length ? PM.res : null;
-    s.append(section("Public market equivalent", `What the same dollars would have done in the benchmark: the account's ${usd(w.begin)} on ${fmtDate(w.start)}, plus every deposit and withdrawal on the day it happened, invested in ${bmLabel(A, bmCfg(A))}. Change the blend on the Performance tab.`));
+    s.append(section("Public market equivalent", `What the same dollars would have done in the benchmark: the account's ${usd(w.begin)} on ${fmtDate(w.start)}, plus every deposit and withdrawal on the day it happened, invested in ${bmLabel(A, bmCfg(A))}. Change the blend in the benchmark section above.`));
     if (PM.status === "loading") s.append(h("p", { class: "note" }, "Loading benchmark prices…"));
     else if (PM.status === "off") s.append(h("p", { class: "note" }, "Add the EODHD token to the Vercel project to turn on the benchmark comparison."));
     else if (PM.status === "error") s.append(h("p", { class: "note" }, "Benchmark prices are unavailable right now."));
@@ -812,7 +780,7 @@
         { label: "Benchmark equivalent", num: 1, get: (r) => usd(r.b), raw: (r) => r.b },
         { label: "Difference", num: 1, get: (r) => (r.a - r.b >= 0 ? "+" : "") + usd(r.a - r.b), raw: (r) => r.a - r.b },
       ], rows));
-      s.append(h("p", { class: "note" }, `Net deposits in the period: ${usd(PR.netFlow)}, applied to both on the same dates.${(bmCfg(A).leverage || 1) !== 1 ? ` The benchmark is levered ${bmCfg(A).leverage}× at ${bmCfg(A).borrowRate}%.` : " The benchmark isn't levered; set leverage on the Performance tab to match the margin."} Benchmark income is estimated from each ETF's distributions; the property layer is identical on both sides.`));
+      s.append(h("p", { class: "note" }, `Net deposits in the period: ${usd(PR.netFlow)}, applied to both on the same dates.${(bmCfg(A).leverage || 1) !== 1 ? ` The benchmark is levered ${bmCfg(A).leverage}× at ${bmCfg(A).borrowRate}%.` : " The benchmark isn't levered; set leverage in the benchmark section above to match the margin."} Benchmark income is estimated from each ETF's distributions; the property layer is identical on both sides.`));
     }
 
     const MG = monthlyGains(A, w.start, w.end);
@@ -855,6 +823,29 @@
     });
     if (MG.groups.length) s.append(h("p", { class: "note" }, `${MG.groups.map((g) => g.label).join(", ")}: the unrealized change can't be split by month until the ${MG.groups.map((g) => g.missing.map(fmtDate).join(", ")).join(", ")} statement value is entered on the Upload page, so it's shown once, in the lighter bar.`));
 
+
+    s.append(section("Period by period", "Each row runs between two account values. Gain = ending value − beginning value − net deposits."));
+    const pbp = table([
+      { label: "Period", get: (r) => `${fmtDate(r.start)} – ${fmtDate(r.end)}${r.flowHeavy ? " *" : ""}` },
+      { label: "Begin", num: 1, get: (r) => usd(r.begin) },
+      { label: "Net deposits", num: 1, get: (r) => usd(r.netFlow), raw: (r) => r.netFlow },
+      { label: "Income", num: 1, get: (r) => usd(r.income) },
+      { label: "Margin interest", num: 1, get: (r) => usd(r.interest), raw: (r) => r.interest },
+      { label: "Realized", num: 1, get: (r) => usd(r.realized), raw: (r) => r.realized },
+      { label: "Unrealized", num: 1, get: (r) => usd(r.unrealized), raw: (r) => r.unrealized },
+      { label: "Gain", num: 1, get: (r) => usd(r.gain), raw: (r) => r.gain },
+      { label: "End", num: 1, get: (r) => usd(r.end_value) },
+      { label: "Return", num: 1, get: (r) => pct(r.ret), raw: (r) => r.ret },
+    ], P.periods, {
+      foot: { label: "Total", netFlow: usd(P.netContributions), income: usd(P.income), interest: usd(P.interest), realized: usd(P.realized), unrealized: usd(P.unrealized), gain: usd(P.totalGain), ret: pct(P.twr) },
+      footRaw: { interest: P.interest, realized: P.realized, gain: P.totalGain, unrealized: P.unrealized },
+    });
+    s.append(pbp);
+    // map foot keys
+    const foot = pbp.querySelector("tfoot tr");
+    if (foot) { const cells = foot.children; const vals = ["Total", "", usd(P.netContributions), usd(P.income), usd(P.interest), usd(P.realized), usd(P.unrealized), usd(P.totalGain), "", pct(P.twr)]; vals.forEach((v, i) => { cells[i].textContent = v; cells[i].classList.toggle("neg", String(v).startsWith("−")); }); }
+    if (P.periods.some((x) => x.flowHeavy) || windowsOf(A).some((x) => x.estimated)) s.append(h("p", { class: "note" }, "* The $1.51M wire on 3/2 landed in the first period (inception to 4/30), so that return is a cash-flow-weighted estimate (Modified Dietz), not statement-to-statement" + (A.inception && A.inception.estimated ? ", and it starts from an estimated 2/28 value" : "") + ". Adding the 3/31 statement value (and the 2/28 value, if missing) on the Upload page makes it exact."));
+
     if (pos) {
       const sec = section("Current holdings", `From the ${fmtDate(pos.asOf)} positions export. Gross ${usd(pos.gross)}, margin ${usd(-pos.margin)}, net ${usd(pos.net)}.`);
       const btn = h("button", { class: "btn-small", type: "button" }, "Refresh live prices");
@@ -870,8 +861,10 @@
       const paidInt = -sum(A.income.items.filter((x) => x.k === "Margin interest" && x.d > t12), (x) => x.a);
       const firstD = A.income.items.map((x) => x.d).filter((d) => d > t12).sort()[0];
       const spanMo = firstD ? Math.max(1, Math.round(dayDiff(firstD, A.performance.end || pos.asOf) / 30.44)) : 12;
+      const t12inc = A.income.items.filter((x) => x.k !== "Margin interest" && x.d > t12);
       const paintIncome = () => {
         if (!lastRows) return;
+        const effTax = recv ? sum(t12inc, (x) => itemTax(x)) / recv : taxRates().ordinary;
         const gross = sum(lastRows, (r) => r.liveMV * (r.yield || 0));
         const mi = rateInfo ? (pos.margin * rateInfo.rate) / 100 * (365 / 360) : null;
         incomeBox.replaceChildren(
@@ -880,6 +873,7 @@
             { label: "Income, gross", value: usd(gross), sub: `${pct(gross / sum(lastRows, (r) => r.liveMV))} on ${usd(sum(lastRows, (r) => r.liveMV))} of holdings`, lead: true },
             { label: "Margin interest", value: mi == null ? "…" : usd(-mi), sub: rateInfo ? `${usd(pos.margin)} at ${rateInfo.rate.toFixed(2)}%` : "loading rate" },
             { label: "Income, net of margin interest", value: mi == null ? "…" : usd(gross - mi), sub: mi == null ? "" : `${pct((gross - mi) / pos.net)} on ${usd(pos.net)} of net equity` },
+            { label: "Net of estimated taxes and interest", value: mi == null ? "…" : usd(gross * (1 - effTax) - mi * (1 - taxRates().interestSave)), sub: `${pct(effTax, 1)} estimated tax on income (Income tab assumptions)` },
             { label: `Received, last ${spanMo < 12 ? `${spanMo} months` : "12 months"}`, value: usd(recv - paidInt), sub: `${usd(recv)} income less ${usd(paidInt)} margin interest` },
           ]),
           h("p", { class: "note" }, `Estimates use each fund's current yield on today's market value${rateInfo ? ` and the ${rateInfo.source}` : ""}. Schwab charges margin interest on a 360-day year. Distributions vary month to month.`));
@@ -936,7 +930,47 @@
     root.replaceChildren(s);
   }
 
-  /* ================= INCOME ================= */
+  /* ================= INCOME (gross, estimated taxes and net, plus the calendar-year tax picture) ================= */
+  const TAX_DEFAULTS = { ord: 37, qual: 20, state: 4.95, roc: 0, other: 0, niit: true, dedInt: true };
+  let taxA = (() => { try { return { ...TAX_DEFAULTS, ...JSON.parse(sessionStorage.getItem("bs-tax") || "{}") }; } catch { return { ...TAX_DEFAULTS }; } })();
+  const saveTax = () => { try { sessionStorage.setItem("bs-tax", JSON.stringify(taxA)); } catch {} };
+  const CASH_DIV = "Cash dividend (character set on 1099)";
+  // Marginal rates by tax character (federal + Illinois + NIIT). Margin interest saves federal tax and NIIT when deducted (not Illinois).
+  function taxRates(t = taxA) {
+    const niit = t.niit ? 0.038 : 0, st = t.state / 100;
+    return { ordinary: t.ord / 100 + st + niit, qualified: t.qual / 100 + st + niit, roc: Math.min(Math.max(t.roc, 0), 100) / 100, interestSave: t.dedInt ? t.ord / 100 + niit : 0 };
+  }
+  // Estimated tax on one income item (negative for margin interest: the deduction's tax saving).
+  function itemTax(x, r = taxRates()) {
+    if (x.k === "Margin interest") return x.a * r.interestSave; // x.a is negative
+    if (x.k === "Return of capital") return 0; // reduces basis, not taxed now
+    if (x.k === "Qualified dividend" || x.k === "Capital gain distribution") return x.a * r.qualified;
+    if (x.k === CASH_DIV) return x.a * (1 - r.roc) * r.ordinary;
+    return x.a * r.ordinary; // non-qualified, substitute payments, interest, cash in lieu
+  }
+  const rateText = (t = taxA) => `${t.ord}% federal ordinary, ${t.qual}% qualified, ${t.state}% Illinois${t.niit ? ", 3.8% NIIT" : ""}, ${t.roc}% return of capital${t.dedInt ? ", margin interest deducted" : ""}`;
+
+  function taxForm(onChange) {
+    const field = (key, label, step, hint) => {
+      const inp = h("input", { type: "number", step, value: taxA[key] });
+      inp.addEventListener("input", () => { taxA[key] = Number(inp.value) || 0; saveTax(); onChange(); });
+      return h("label", { class: "tax-field" }, h("span", {}, label), inp, hint ? h("small", {}, hint) : null);
+    };
+    const check = (key, label) => {
+      const inp = h("input", { type: "checkbox" }); inp.checked = !!taxA[key];
+      inp.addEventListener("change", () => { taxA[key] = inp.checked; saveTax(); onChange(); });
+      return h("label", { class: "tax-field tax-check" }, inp, h("span", {}, label));
+    };
+    return h("div", { class: "tax-form" },
+      field("ord", "Federal ordinary rate %", "0.1"),
+      field("qual", "Federal qualified / LT rate %", "0.1"),
+      field("state", "State rate %", "0.01", "Illinois flat rate; margin interest isn't deductible for Illinois"),
+      field("roc", "Return of capital share of cash dividends %", "1", "Covered-call funds often report a large share as ROC"),
+      field("other", "Other net capital gains this year $", "100", "Outside this account; enter gains as positive"),
+      check("niit", "Apply 3.8% net investment income tax"),
+      check("dedInt", "Deduct margin interest (Form 4952, itemizing)"));
+  }
+
   function renderIncome(root, A) {
     const rerender = () => renderIncome(root, A);
     const w = pickWindow(A, "cash");
@@ -944,39 +978,105 @@
     const from = w.cashStart, to = w.cashEnd || w.end;
     const items = A.income.items.filter((x) => x.d > from && x.d <= to);
     const inc = items.filter((x) => x.k !== "Margin interest");
-    const total = sum(inc, (x) => x.a), interestPaid = sum(items.filter((x) => x.k === "Margin interest"), (x) => x.a);
+    const mint = items.filter((x) => x.k === "Margin interest");
+    const total = sum(inc, (x) => x.a), interestPaid = sum(mint, (x) => x.a);
     const monthsSpan = Math.max(1, (new Date(to) - new Date(from)) / (30.4375 * 864e5));
-    const byMonth = {};
-    inc.forEach((x) => { const m = x.d.slice(0, 7); byMonth[m] = byMonth[m] || {}; byMonth[m][x.k] = (byMonth[m][x.k] || 0) + x.a; });
-    const months = Object.keys(byMonth).sort();
+    const months = [...new Set(items.map((x) => x.d.slice(0, 7)))].sort();
     const cats = [...new Set(inc.map((x) => x.k))];
-    const s = sheet("Income", "Distributions and interest received, by month and by tax character as Schwab reports it today. Final character comes on the 1099.");
+
+    const s = sheet("Income", "Distributions and interest received, gross and net of estimated taxes, by month, fund and tax character. Taxes are estimates from the assumptions below, using each payment's character as Schwab reports it today; final character comes on the 1099.");
     s.append(periodBar(A, "cash", rerender));
-    s.append(kpis([
-      { label: `Income, ${w.label}`, value: usd(total), sub: `${fmtDate(addDaysIso(from, 1))} – ${fmtDate(to)}`, lead: true },
-      { label: "Margin interest paid", value: usd(interestPaid) },
-      { label: "Income after margin interest", value: usd(total + interestPaid) },
-      { label: "Monthly average", value: usd(total / monthsSpan), sub: `over ${monthsSpan < 1.5 ? "the period" : Math.round(monthsSpan) + " months"}` },
-    ]));
-    if (w.clamped || w.key === "ITD") s.append(h("p", { class: "note" }, `Shown from inception (${fmtDate(A.inception && A.inception.date)}). The Tax tab covers the full calendar year, including January and February.`));
+    const kpiBox = h("div");
+    s.append(kpiBox);
+
+    const det = h("details", { class: "bm-details" });
+    const sumEl = h("summary", {});
+    det.append(sumEl, h("p", { class: "note" }, "Changes recalculate everything on this page, including the calendar-year tax estimate at the bottom. Defaults are conservative: no return of capital until the 1099 says so."));
+    const paintCbs = [];
+    det.append(taxForm(() => paintCbs.forEach((f) => f())));
+    s.append(section("Tax assumptions"), det);
+
+    if (w.clamped || w.key === "ITD") s.append(h("p", { class: "note" }, `Shown from inception (${fmtDate(A.inception && A.inception.date)}). The tax picture at the bottom covers the full calendar year, including January and February.`));
+
     const palette = [C.green, C.navy, C.gold, C.haze, C.bronze, C.grey, C.sky];
-    const { box, canvas } = chartBox(300);
-    s.append(section("Income by month"), box);
-    draw(canvas, {
-      type: "bar",
-      data: { labels: months.map(monthLabel), datasets: cats.map((k, i) => ({ label: k, data: months.map((m) => byMonth[m][k] || 0), backgroundColor: palette[i % palette.length], stack: "i" })) },
-      options: { responsive: true, maintainAspectRatio: false, plugins: { tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${usd(c.raw)}` } } }, scales: { x: { stacked: true }, y: { stacked: true, ticks: { callback: moneyTick } } } },
-    });
-    const bySym = {};
-    inc.forEach((x) => { const k = x.s || "(cash)"; bySym[k] = (bySym[k] || 0) + x.a; });
-    s.append(section(`Income by fund, ${w.label}`));
-    s.append(table([{ label: "Fund", get: (r) => r.symbol }, { label: "Received", num: 1, get: (r) => usd(r.amount, 2) }, { label: "Share", num: 1, get: (r) => pct(total ? r.amount / total : 0, 1) }],
-      Object.entries(bySym).map(([symbol, amount]) => ({ symbol, amount })).sort((a, b) => b.amount - a.amount)));
-    const byChar = {};
-    inc.forEach((x) => { byChar[x.k] = (byChar[x.k] || 0) + x.a; });
-    s.append(section(`Income by tax character, ${w.label}`));
-    s.append(table([{ label: "Character", get: (r) => r.k }, { label: "Amount", num: 1, get: (r) => usd(r.a, 2) }, { label: "Share", num: 1, get: (r) => pct(total ? r.a / total : 0, 1) }],
-      Object.entries(byChar).map(([k, a]) => ({ k, a })).sort((a, b) => b.a - a.a)));
+    const { box, canvas } = chartBox(320);
+    s.append(section("Income by month, gross and net of estimated taxes", "Bars are gross income by tax character; the line is what's left after estimated taxes."), box);
+    const monthTbl = h("div"), fundTbl = h("div"), charTbl = h("div");
+    s.append(monthTbl);
+    s.append(section(`Income by fund, ${w.label}`), fundTbl);
+    s.append(section(`Income by tax character, ${w.label}`), charTbl);
+    let chart = null;
+
+    const paint = () => {
+      const r = taxRates();
+      sumEl.textContent = rateText();
+      const tax = sum(inc, (x) => itemTax(x, r));
+      const intSave = -sum(mint, (x) => itemTax(x, r)); // positive saving
+      const net = total - tax;
+      const intAfter = interestPaid + intSave; // negative
+      kpiBox.replaceChildren(kpis([
+        { label: `Income, gross, ${w.label}`, value: usd(total), sub: `${fmtDate(addDaysIso(from, 1))} – ${fmtDate(to)}`, lead: true },
+        { label: "Estimated taxes on income", value: usd(-tax), sub: `${pct(total ? tax / total : 0, 1)} effective` },
+        { label: "Income, net of taxes", value: usd(net), sub: `${usd(net / monthsSpan)} a month`, lead: true },
+        { label: "Margin interest, after tax", value: usd(intAfter), sub: `${usd(interestPaid)} paid${intSave ? `, ${usd(intSave)} tax saving` : ""}` },
+        { label: "Net of taxes and margin interest", value: usd(net + intAfter), sub: `${usd((net + intAfter) / monthsSpan)} a month` },
+      ]));
+
+      const rows = months.map((m) => {
+        const mi = inc.filter((x) => x.d.startsWith(m)), mm = mint.filter((x) => x.d.startsWith(m));
+        const g = sum(mi, (x) => x.a), t = sum(mi, (x) => itemTax(x, r)), ip = sum(mm, (x) => x.a), is = -sum(mm, (x) => itemTax(x, r));
+        const byK = {}; mi.forEach((x) => { byK[x.k] = (byK[x.k] || 0) + x.a; });
+        return { m, g, t, n: g - t, ip, is, all: g - t + ip + is, byK };
+      });
+      if (chart) chart.destroy();
+      chart = draw(canvas, {
+        type: "bar",
+        data: { labels: rows.map((x) => monthLabel(x.m)), datasets: [
+          ...cats.map((k, i) => ({ label: k, data: rows.map((x) => x.byK[k] || 0), backgroundColor: palette[i % palette.length], stack: "i" })),
+          { type: "line", label: "Net of estimated taxes", data: rows.map((x) => x.n), borderColor: C.red, backgroundColor: C.red, borderWidth: 2.5, pointRadius: 3, order: -1 },
+        ] },
+        options: { responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
+          plugins: { tooltip: { filter: (c) => !!c.raw, callbacks: { label: (c) => `${c.dataset.label}: ${usd(c.raw)}`, afterBody: (its) => { if (!its.length) return []; const x = rows[its[0].dataIndex]; return [`Gross ${usd(x.g)}, est. tax ${usd(-x.t)}, net ${usd(x.n)}`]; } } } },
+          scales: { x: { stacked: true }, y: { stacked: true, ticks: { callback: moneyTick } } } },
+      });
+      const tt = { g: sum(rows, (x) => x.g), t: sum(rows, (x) => x.t), n: sum(rows, (x) => x.n), ip: sum(rows, (x) => x.ip), is: sum(rows, (x) => x.is), all: sum(rows, (x) => x.all) };
+      monthTbl.replaceChildren(table([
+        { label: "Month", get: (x) => (x.total ? h("strong", {}, "Total") : monthLabel(x.m)) },
+        { label: "Income, gross", num: 1, get: (x) => usd(x.g) },
+        { label: "Est. taxes", num: 1, get: (x) => usd(-x.t), raw: (x) => -x.t },
+        { label: "Income, net of taxes", num: 1, get: (x) => usd(x.n) },
+        { label: "Margin interest", num: 1, get: (x) => usd(x.ip), raw: (x) => x.ip },
+        { label: "Tax saving on interest", num: 1, get: (x) => (x.is ? usd(x.is) : "—") },
+        { label: "Net after interest and taxes", num: 1, get: (x) => usd(x.all), raw: (x) => x.all },
+      ], rows.concat([{ ...tt, total: true, _class: "sum" }])));
+
+      const bySym = {};
+      inc.forEach((x) => { const k = x.s || "(cash)"; bySym[k] = bySym[k] || { symbol: k, amount: 0, tax: 0 }; bySym[k].amount += x.a; bySym[k].tax += itemTax(x, r); });
+      const fr = Object.values(bySym).sort((a, b) => b.amount - a.amount);
+      fundTbl.replaceChildren(table([
+        { label: "Fund", get: (x) => (x.total ? h("strong", {}, "Total") : x.symbol) },
+        { label: "Received, gross", num: 1, get: (x) => usd(x.amount, 2) },
+        { label: "Share", num: 1, get: (x) => pct(total ? x.amount / total : 0, 1) },
+        { label: "Est. taxes", num: 1, get: (x) => usd(-x.tax, 2), raw: (x) => -x.tax },
+        { label: "Net of taxes", num: 1, get: (x) => usd(x.amount - x.tax, 2) },
+        { label: "Effective rate", num: 1, get: (x) => pct(x.amount ? x.tax / x.amount : 0, 1) },
+      ], fr.concat([{ total: true, _class: "sum", amount: total, tax }])));
+
+      const byChar = {};
+      inc.forEach((x) => { byChar[x.k] = byChar[x.k] || { k: x.k, a: 0, tax: 0 }; byChar[x.k].a += x.a; byChar[x.k].tax += itemTax(x, r); });
+      const rateOf = (k) => (k === "Return of capital" ? 0 : k === "Qualified dividend" || k === "Capital gain distribution" ? r.qualified : k === CASH_DIV ? (1 - r.roc) * r.ordinary : r.ordinary);
+      charTbl.replaceChildren(table([
+        { label: "Character", get: (x) => (x.total ? h("strong", {}, "Total") : x.k) },
+        { label: "Amount, gross", num: 1, get: (x) => usd(x.a, 2) },
+        { label: "Share", num: 1, get: (x) => pct(total ? x.a / total : 0, 1) },
+        { label: "Tax rate used", num: 1, get: (x) => (x.total ? pct(total ? tax / total : 0, 1) : pct(rateOf(x.k), 1)) },
+        { label: "Est. taxes", num: 1, get: (x) => usd(-x.tax, 2), raw: (x) => -x.tax },
+        { label: "Net of taxes", num: 1, get: (x) => usd(x.a - x.tax, 2) },
+      ], Object.values(byChar).sort((a, b) => b.a - a.a).concat([{ total: true, _class: "sum", a: total, tax }])));
+    };
+    paintCbs.push(paint);
+    paint();
+
     if (A.positions) {
       const up = A.positions.holdings.filter((x) => x.exDiv || x.payDate).sort((a, b) => (b.exDiv || "").localeCompare(a.exDiv || ""));
       s.append(section("Latest declared distributions", `From the ${fmtDate(A.positions.asOf)} positions export.`));
@@ -988,11 +1088,13 @@
         { label: "Est. payment", num: 1, get: (r) => usd(r.lastDiv * r.quantity) },
       ], up));
     }
+
+    taxPicture(s, A, paintCbs);
     root.replaceChildren(s);
   }
 
-  /* ================= TAX ================= */
-  function renderTax(root, A) {
+  /* ---------- calendar-year tax picture (bottom of the Income tab) ---------- */
+  function taxPicture(s, A, paintCbs) {
     const years = Object.keys(A.realized).sort();
     const year = years[years.length - 1] || (A.performance.end || "").slice(0, 4);
     const R = A.realized[year] || { st: 0, lt: 0, net: 0, gains: 0, losses: 0, washLots: 0, disallowed: 0, detail: [], byMonth: [] };
@@ -1001,7 +1103,8 @@
     months.forEach((m) => Object.entries(m).forEach(([k, v]) => { if (k !== "month" && k !== "total") inc[k] = (inc[k] || 0) + v; }));
     const interestPaid = -sum(A.income.interestByMonth.filter((m) => m.month.startsWith(year)), (m) => m.interest);
 
-    const s = sheet(`Tax picture, calendar ${year}`, `Full tax year: realized results ${fmtDate(R.from || year + "-01-01")} through ${fmtDate(R.to)} and all income received in ${year}, including the months before the ${fmtDate(A.inception && A.inception.date)} performance inception. An estimate to review with Jason, not tax advice; final character comes from the ${year} 1099.`);
+    s.append(h("h2", { class: "sub-head", id: "tax" }, `Tax picture, calendar ${year}`));
+    s.append(h("p", { class: "lede" }, `Full tax year: realized results ${fmtDate(R.from || year + "-01-01")} through ${fmtDate(R.to)} and all income received in ${year}, including the months before the ${fmtDate(A.inception && A.inception.date)} performance inception. An estimate to review with Jason, not tax advice; final character comes from the ${year} 1099.`));
     s.append(kpis([
       { label: "Net realized", value: usd(R.net), sub: `${usd(R.st)} short-term, ${usd(R.lt)} long-term`, lead: true },
       { label: "Realized gains", value: usd(R.gains) },
@@ -1009,7 +1112,6 @@
       { label: "Wash-sale losses deferred", value: usd(R.disallowed), sub: `${R.washLots} lots; added to replacement shares' basis` },
       { label: "Margin interest paid", value: usd(interestPaid), sub: "investment interest expense" },
     ]));
-
     // Before vs since inception, so the tax year ties to the performance window
     const inc0 = (A.inception && A.inception.date) || `${year}-01-01`;
     const yItems = A.income.items.filter((x) => x.d.startsWith(year));
@@ -1034,31 +1136,18 @@
       ], [row(`1/1 – ${fmtDate(addDaysIso(inc0, -1))} (before inception)`, pre), row(`${fmtDate(inc0)} – ${fmtDate(R.to)} (since inception)`, post), row(`Calendar ${year}`, tot, "sum")]));
     }
 
-    s.append(section("Estimate", "Adjust the assumptions; everything below recalculates. Defaults are conservative: no return of capital until the 1099 says so."));
-    const field = (id, label, value, step, hint) => h("label", { class: "tax-field" }, h("span", {}, label), h("input", { id, type: "number", step, value }), hint ? h("small", {}, hint) : null);
-    const form = h("div", { class: "tax-form" },
-      field("t-ord", "Federal ordinary rate %", 37, "0.1"),
-      field("t-qual", "Federal qualified / LT rate %", 20, "0.1"),
-      field("t-state", "State rate %", 4.95, "0.01", "Illinois flat rate; margin interest isn't deductible for Illinois"),
-      field("t-roc", "Return of capital share of cash dividends %", 0, "1", "Covered-call funds often report a large share as ROC"),
-      field("t-other", "Other net capital gains this year $", 0, "100", "Outside this account; enter gains as positive"),
-      h("label", { class: "tax-field tax-check" }, h("input", { id: "t-niit", type: "checkbox", checked: true }), h("span", {}, "Apply 3.8% net investment income tax")),
-      h("label", { class: "tax-field tax-check" }, h("input", { id: "t-int", type: "checkbox", checked: true }), h("span", {}, "Deduct margin interest (Form 4952, itemizing)")));
-    s.append(form);
+    s.append(section(`Estimated tax, calendar ${year}`, "Uses the tax assumptions at the top of this page, and adds this account's realized gains and losses and the margin-interest deduction to the income above."));
     const out = h("div", { class: "tax-out" });
     s.append(out);
-
     const cashDiv = inc["Cash dividend (character set on 1099)"] || 0;
     const nonQual = inc["Non-qualified dividend"] || 0;
     const qual = inc["Qualified dividend"] || 0;
     const subst = inc["Substitute payment in lieu"] || 0;
     const interest = (inc["Interest"] || 0) + (inc["Cash in lieu"] || 0);
     const calc = () => {
-      const q = (id) => form.querySelector("#" + id);
-      const g = (id) => Number(q(id).value) || 0;
-      const ord = g("t-ord") / 100, ql = g("t-qual") / 100, st = g("t-state") / 100, roc = Math.min(Math.max(g("t-roc"), 0), 100) / 100, other = g("t-other");
-      const niit = q("t-niit").checked ? 0.038 : 0;
-      const dedInt = q("t-int").checked;
+      const ord = taxA.ord / 100, ql = taxA.qual / 100, st = taxA.state / 100, roc = Math.min(Math.max(taxA.roc, 0), 100) / 100, other = Number(taxA.other) || 0;
+      const niit = taxA.niit ? 0.038 : 0;
+      const dedInt = !!taxA.dedInt;
       const rocAmt = cashDiv * roc;
       const ordinaryInc = cashDiv - rocAmt + nonQual + subst + interest;
       const intDeduction = dedInt ? Math.min(interestPaid, ordinaryInc) : 0;
@@ -1095,7 +1184,7 @@
         ]),
         h("p", { class: "note" }, `For comparison, the workbook assumes an 11% effective rate. The gap is the return-of-capital share: set it above to see the break-even.`));
     };
-    form.addEventListener("input", calc);
+    paintCbs.push(calc);
     calc();
 
     // Harvesting & wash-sale windows
@@ -1143,18 +1232,18 @@
       { label: "Wash sale", get: (r) => (r.w ? `Yes, ${usd(r.d, 2)} deferred` : "") },
     ], R.detail));
     s.append(det);
-    root.replaceChildren(s);
   }
 
   window.BSDash = {
     tabs: [
       { slug: "performance", name: "Performance" },
-      { slug: "gains", name: "Gains & Losses" },
       { slug: "income", name: "Income" },
-      { slug: "tax", name: "Tax" },
     ],
+    // Old tab links (#gains, #tax) land on the merged tabs.
+    aliases: { gains: "performance", tax: "income" },
+    taxRates, itemTax,
     render(slug, root, A) {
-      ({ performance: renderPerformance, gains: renderGains, income: renderIncome, tax: renderTax })[slug](root, A);
+      ({ performance: renderPerformance, income: renderIncome })[slug](root, A);
     },
   };
 })();

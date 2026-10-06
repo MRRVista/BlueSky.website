@@ -168,3 +168,16 @@ details.lots summary { cursor: pointer; color: #183763; font-weight: 500; }
 @media (max-width: 600px) { .stmt-found { grid-template-columns: 1fr; } .stmt-found dt { margin-top: 0.4rem; } }
 .dash h4.inc-head { margin: 1.1rem 0 0.35rem; font-size: 1rem; font-weight: 500; color: #0c1c36; }
 .dash .bm-parts { margin-top: 0.4rem; }
+/* "Other" dropdown in the tab bar */
+.tabs li.tab-more-li { flex: none; }
+.tabs .tab-more { display: block; white-space: nowrap; padding: 0.85rem 0.9rem 0.75rem; font: inherit; font-size: 0.9rem; color: var(--mist-dim); background: none; border: 0; border-bottom: 2px solid transparent; cursor: pointer; }
+.tabs .tab-more:hover, .tabs .tab-more[aria-expanded="true"] { color: var(--mist); }
+.tabs .tab-more.on { color: var(--mist); border-bottom-color: var(--gold); }
+.tabs .tab-more:focus-visible { outline-offset: -3px; }
+.tabs .tab-caret { margin-left: 0.35rem; font-size: 0.75em; }
+.tab-menu { position: fixed; z-index: 50; min-width: 15rem; max-width: calc(100vw - 16px); max-height: 70vh; overflow-y: auto; margin: 0; padding: 0.35rem 0; list-style: none; background: #0f2443; border: 1px solid rgba(201, 162, 98, 0.45); border-top: 0; box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35); }
+.tab-menu a { display: block; padding: 0.55rem 1rem; font-size: 0.9rem; color: var(--mist-dim); text-decoration: none; border-left: 2px solid transparent; }
+.tab-menu a:hover, .tab-menu a:focus { color: var(--mist); background: rgba(238, 243, 248, 0.06); outline: none; }
+.tab-menu a[aria-current="page"] { color: var(--mist); border-left-color: var(--gold); }
+/* Second section heading on a merged tab (Income → Tax picture) */
+.dash h2.sub-head { margin-top: 3rem; padding-top: 1.75rem; border-top: 1px solid #d8e0ec; scroll-margin-top: 4rem; }

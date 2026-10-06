@@ -1,6 +1,6 @@
 // Blue Sky properties: building details, rent and expense ledger (manual entry and Excel upload),
 // mortgage terms and schedule. Everything saves to the server and is shared by every signed-in user.
-// Also exposes the math the Gains & Losses tab uses to layer the property onto the portfolio.
+// Also exposes the math the Performance tab uses to layer the property onto the portfolio.
 (function () {
   const usd = (n, d = 0) => n == null || !isFinite(n) ? "—" : (n < 0 ? "−" : "") + "$" + Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
   const fmtDate = (iso) => { if (!iso) return "—"; const [y, m, d] = String(iso).slice(0, 10).split("-"); return `${+m}/${+d}/${y}`; };
@@ -90,7 +90,7 @@
     return data;
   }
 
-  /* ======================= math (shared with Gains & Losses) ======================= */
+  /* ======================= math (shared with Performance) ======================= */
   const catType = (name, d = data) => ((d && d.categories.find((c) => c.name === name)) || {}).type || "expense";
   function addMonths(d, n) {
     const y = +d.slice(0, 4), m = +d.slice(5, 7) - 1, day = +d.slice(8, 10);
@@ -251,7 +251,7 @@
     listeners.add(redraw);
     if (!data.properties[curProp]) curProp = (data.order || Object.keys(data.properties))[0];
     const p = data.properties[curProp];
-    const s = sheet("Properties", "Building details, rent, expenses and the mortgage for each property. Everything saves to the site for both of you and stays until it's changed. These figures feed the property layers on the Gains & Losses tab.");
+    const s = sheet("Properties", "Building details, rent, expenses and the mortgage for each property. Everything saves to the site for both of you and stays until it's changed. These figures feed the property layers on the Performance tab.");
     s.append(propChips(redraw));
     root.replaceChildren(s);
     if (p.status !== "active") return comingSoon(s, p);
@@ -294,7 +294,7 @@
         h("li", {}, h("strong", {}, "Rent"), " — monthly rent by Excel upload or entered by hand"),
         h("li", {}, h("strong", {}, "Expenses"), " — property taxes, insurance, repairs, utilities, management and other costs, by upload or by hand"),
         h("li", {}, h("strong", {}, "Mortgage"), " — loan amount, date, rate and amortization, with the payment schedule calculated"),
-        h("li", {}, h("strong", {}, "Gains & Losses"), " — its own property layer alongside the portfolio")),
+        h("li", {}, h("strong", {}, "Performance"), " — its own property layer alongside the portfolio")),
       h("p", { class: "note" }, "Nothing can be entered for this property yet.")));
   }
 

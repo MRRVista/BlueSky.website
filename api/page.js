@@ -70,7 +70,7 @@ function uploadPage(email) {
         <p class="lede">Drop in Schwab exports and monthly statement PDFs. The dashboard updates as soon as they're saved. Files stay private to this site.</p>
         <div class="dropzone" id="drop" tabindex="0" role="button" aria-describedby="drop-hint">
           <p><strong>Drop files here</strong> or click to choose</p>
-          <p class="note" id="drop-hint">CSV straight from Schwab (or saved as Excel), and monthly statement PDFs. Drop several at once; each is identified from its contents, not its file name.</p>
+          <p class="note" id="drop-hint">CSV straight from Schwab (or saved as Excel), monthly statement PDFs, and the 5100 Main report workbook. Drop several at once; each is identified from its contents, not its file name.</p>
           <input type="file" id="file" accept=".csv,.xlsx,.xls,.pdf,text/csv,application/pdf" multiple hidden>
         </div>
         <div id="results" class="results" role="status" aria-live="polite"></div>
@@ -107,6 +107,11 @@ function uploadPage(email) {
             <p>Not needed: income is already calculated from Transactions. Keep it as a cross-check against Schwab's own totals.</p>
             <p class="where">Recognized by the first line <code>Investment Income</code>.</p>
             <p class="status" id="st-income"></p></div>
+          <div class="ftype"><h4>7. 5100 Main report workbook <span class="tag">When it changes</span></h4>
+            <p class="where">The <em>5100 Main Equity Strip REPORT</em> Excel workbook (.xlsx).</p>
+            <p>Replaces the workbook tabs on the home page (The Report, Income &amp; Worth It, and everything under Other). The previous version is kept, and the workbook is filed in Documents.</p>
+            <p class="where">Recognized by its tab names (The Report, Statement Log, Assumptions…).</p>
+            <p class="status" id="st-report"></p></div>
         </div>
 
         <div class="dash-sec"><h3>Add a statement value</h3>
@@ -121,7 +126,7 @@ function uploadPage(email) {
         <p style="margin-top:1.5rem"><a href="/home#performance" style="color:#183763">Go to the dashboard</a></p>
       </article>
     </main>`,
-    script: `<script src="/statement.js" defer></script><script src="/upload.js" defer></script>`,
+    script: `<script src="/statement.js" defer></script><script src="/workbook.js" defer></script><script src="/upload.js" defer></script>`,
   });
 }
 
