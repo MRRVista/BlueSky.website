@@ -6,10 +6,11 @@ Blue Sky Investment Group — sign-in page and the 5100 Main Equity Strip report
 | Path | What it is |
 |---|---|
 | `/` | Sign-in page |
-| `/home` | Signed-in home: the 5100 Main report, one header tab per workbook tab |
+| `/home` | Signed-in home: Performance, Income, AI Assistant, Properties, Documents, Admin, an **Other** menu (Statement Log, Assumptions, Forecast Model, Loan & Closing, Schwab Tracker, Matt's, Real #s 8.24.2026, Discussion Topics, Watch Items), then The Report, Income & Worth It and The Honest Read |
+| `/upload` | Schwab exports, statement PDFs and the report workbook |
 | `/account` | Change password |
 | `/api/login`, `/api/logout`, `/api/me`, `/api/change-password` | Auth endpoints |
-| `/api/report` | Report data (signed-in only) |
+| `/api/report` | Report data (signed-in only); POST replaces it with a workbook read on the Upload page |
 
 ## Accounts
 Only the emails in `lib/auth.js` → `ALLOWED_EMAILS` can sign in.
@@ -26,6 +27,10 @@ Only the emails in `lib/auth.js` → `ALLOWED_EMAILS` can sign in.
 - `BLOB_READ_WRITE_TOKEN` — added automatically by the connected Blob store
 
 ## Report (signed-in home)
-The data is **not** in this repo: `tools/extract.py` converts the workbook to JSON, which is uploaded to the private Blob store at `data/report.json` and served only to signed-in users by `/api/report`.
+The workbook data is **not** in this repo; it lives in the private Blob store at `data/report.json` and is served only to signed-in users by `/api/report`.
 
-To refresh after a new statement: run `python3 tools/extract.py <workbook.xlsx> report.json` and upload `report.json` to `data/report.json` in the Blob store.
+To refresh after a new workbook: drop the `.xlsx` on the Upload page. `public/workbook.js` reads it in the browser (same output as `tools/extract.py`), files the original in Documents under Reports & models, and replaces the report. Each previous version is kept in `data/report-history/`.
+
+`tools/extract.py <workbook.xlsx> report.json` still produces the same JSON for a manual upload.
+
+Old links `#gains` and `#tax` open the merged Performance and Income tabs.
