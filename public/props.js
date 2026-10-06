@@ -295,7 +295,12 @@
         h("li", {}, h("strong", {}, "Expenses"), " — property taxes, insurance, repairs, utilities, management and other costs, by upload or by hand"),
         h("li", {}, h("strong", {}, "Mortgage"), " — loan amount, date, rate and amortization, with the payment schedule calculated"),
         h("li", {}, h("strong", {}, "Performance"), " — its own property layer alongside the portfolio")),
-      h("p", { class: "note" }, "Nothing can be entered for this property yet.")));
+      h("p", { class: "note" }, "Switch it on when you're ready to enter its details. It then appears on the Overview and Cash Flow tabs."),
+      h("div", { class: "ws-row-btns" }, h("button", { type: "button", class: "btn-small", onclick: async (e) => {
+        if (!confirm(`Switch on ${p.name}? Its building, rent, expense and mortgage inputs will open.`)) return;
+        e.target.disabled = true;
+        try { await save({ op: "activate", property: curProp }); } catch (err) { e.target.disabled = false; alert(err.message); }
+      } }, `Switch on ${p.name}`))));
   }
 
   function buildingSection(p, run) {
@@ -306,12 +311,29 @@
       currentValue: input("number", b.currentValue, { step: "0.01", min: "0" }), valueAsOf: input("date", b.valueAsOf),
       squareFeet: input("number", b.squareFeet, { step: "1", min: "0" }), units: input("number", b.units, { step: "1", min: "0" }),
       notes: h("textarea", { rows: 2 }, b.notes || ""),
+      // valuation and pro forma (used on the Overview and Cash Flow tabs)
+      capRate: input("number", b.capRate, { step: "0.05", min: "0", placeholder: "e.g. 6.5" }),
+      valuationMethod: select([["cap", "NOI ÷ market cap rate"], ["entered", "Current value entered above"]], b.valuationMethod || "cap"),
+      noiSource: select([["auto", "Automatic: actual if a year of rent is on file"], ["actual", "Actual, last 12 months of the ledger"], ["proforma", "Pro forma, from the figures below"]], b.noiSource || "auto"),
+      grossRent: input("number", b.grossRent, { step: "1", min: "0", placeholder: "annual" }),
+      vacancyPct: input("number", b.vacancyPct, { step: "0.5", min: "0", placeholder: "e.g. 5" }),
+      opexAnnual: input("number", b.opexAnnual, { step: "1", min: "0", placeholder: "annual" }),
+      propertyType: select([["residential", "Residential rental (27.5-year)"], ["commercial", "Commercial (39-year)"], ["mixed", "Mixed use (39-year)"]], b.propertyType || "residential"),
+      landPct: input("number", b.landPct, { step: "1", min: "0", placeholder: "e.g. 20" }),
+      improvements: input("number", b.improvements, { step: "1", min: "0", placeholder: "capital improvements since purchase" }),
+      placedInService: input("date", b.placedInService),
     };
     const wrap = h("details", { class: "ws-add" }, h("summary", {}, b.address ? `${b.address}${b.currentValue ? ` · value ${usd(b.currentValue)}` : ""}` : "Add building details"));
     const saveBtn = h("button", { type: "button", class: "btn-small" }, "Save building details");
     saveBtn.addEventListener("click", () => run({ op: "setBuilding", building: Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.value])) }, "Building details saved."));
     wrap.append(h("div", { class: "ws-row" }, field("Address", f.address), field("Purchase date", f.purchaseDate), field("Purchase price $", f.purchasePrice)),
       h("div", { class: "ws-row" }, field("Current value $", f.currentValue, "Optional. Not used in returns yet."), field("Value as of", f.valueAsOf), field("Square feet", f.squareFeet), field("Units", f.units)),
+      h("h4", { class: "inc-head" }, "Valuation and income"),
+      h("p", { class: "note" }, "Used on the Overview and Cash Flow tabs. Value = net operating income ÷ cap rate, unless you choose the entered value. Pro forma figures are used until a year of rent is in the ledger."),
+      h("div", { class: "ws-row" }, field("Market cap rate %", f.capRate), field("Value from", f.valuationMethod), field("Net operating income from", f.noiSource)),
+      h("div", { class: "ws-row" }, field("Pro forma gross rent $/yr", f.grossRent), field("Vacancy %", f.vacancyPct), field("Pro forma operating expenses $/yr", f.opexAnnual, "Taxes, insurance, repairs, utilities, management")),
+      h("h4", { class: "inc-head" }, "Depreciation (for the tax estimate)"),
+      h("div", { class: "ws-row" }, field("Property type", f.propertyType), field("Land share of price %", f.landPct, "Land isn't depreciable; the county assessment split is a good guide"), field("Improvements $", f.improvements), field("Placed in service", f.placedInService, "Defaults to the purchase date")),
       field("Notes", f.notes), h("div", { class: "ws-row-btns" }, saveBtn, b.updatedAt ? h("span", { class: "note inline" }, `Last saved by ${who(b.updatedBy)}, ${fmtWhen(b.updatedAt)}`) : null));
     const sec = section("Building");
     sec.append(wrap);
