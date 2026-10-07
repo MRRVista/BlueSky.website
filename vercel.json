@@ -53,6 +53,10 @@
     {
       "source": "/api/plan",
       "destination": "/api/work?r=plan"
+    },
+    {
+      "source": "/api/split",
+      "destination": "/api/work?r=split"
     }
   ],
   "headers": [
