@@ -1,0 +1,9 @@
+/* Account Split */
+.split-ledger { min-width: 62rem; }
+.split-ledger td { vertical-align: top; }
+.split-ledger .ws-select { padding: 0.3rem 0.4rem; font-size: 0.85rem; }
+.split-note { font: inherit; font-size: 0.85rem; width: 100%; min-width: 11rem; box-sizing: border-box; padding: 0.3rem 0.45rem; border: 1px solid #c9d4e3; border-radius: 4px; color: #0c1c36; background: #fff; }
+.split-note:focus { outline: none; border-color: var(--gold); box-shadow: 0 0 0 3px rgba(201, 162, 98, 0.28); }
+.split-checks { list-style: none; padding: 0; margin: 0.5rem 0 0; font-size: 0.9rem; }
+.split-checks li { margin: 0.3rem 0; color: #1f6b3f; }
+.split-checks li.warn { color: #8a5a00; }
