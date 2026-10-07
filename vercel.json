@@ -57,6 +57,18 @@
     {
       "source": "/api/split",
       "destination": "/api/work?r=split"
+    },
+    {
+      "source": "/api/inputs",
+      "destination": "/api/work?r=inputs"
+    },
+    {
+      "source": "/api/caprates",
+      "destination": "/api/work?r=caprates"
+    },
+    {
+      "source": "/api/plaid",
+      "destination": "/api/work?r=plaid"
     }
   ],
   "headers": [

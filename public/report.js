@@ -159,7 +159,8 @@
   const propTabs = () => (window.BSProps ? window.BSProps.tabs.map((t) => ({ ...t, render: (r) => window.BSProps.render(t.slug, r) })) : []);
   const wealthTabs = () => (window.BSWealth ? window.BSWealth.tabs.map((t) => ({ ...t, render: (r) => window.BSWealth.render(t.slug, r) })) : []);
   const splitTabs = () => (window.BSSplit ? window.BSSplit.tabs.map((t) => ({ ...t, render: (r) => window.BSSplit.render(t.slug, r) })) : []);
-  const workTabs = () => wealthTabs().concat(splitTabs()).concat(aiTabs()).concat(propTabs()).concat(window.BSWork ? window.BSWork.tabs.map((t) => ({ ...t, render: (r) => window.BSWork.render(t.slug, r) })) : []);
+  const inputTabs = () => (window.BSInputs ? window.BSInputs.tabs.map((t) => ({ ...t, render: (r) => window.BSInputs.render(t.slug, r) })) : []);
+  const workTabs = () => wealthTabs().concat(splitTabs()).concat(aiTabs()).concat(propTabs()).concat(window.BSWork ? window.BSWork.tabs.map((t) => ({ ...t, render: (r) => window.BSWork.render(t.slug, r) })) : []).concat(inputTabs());
 
   function show(slug) {
     if (!slug && window.BSWealth) slug = "overview"; // the Overview is the landing page
@@ -208,13 +209,14 @@
     sc.onload = res; sc.onerror = res;
     document.head.append(sc);
   }));
-  const loadWork = Promise.all([loadScript("/props.js", window.BSProps), loadScript("/workspace.js", window.BSWork), loadScript("/ai.js", window.BSAI), loadScript("/wealth.js", window.BSWealth), loadScript("/split.js", window.BSSplit)]);
+  const loadWork = Promise.all([loadScript("/props.js", window.BSProps), loadScript("/workspace.js", window.BSWork), loadScript("/ai.js", window.BSAI), loadScript("/wealth.js", window.BSWealth), loadScript("/split.js", window.BSSplit), loadScript("/inputs.js", window.BSInputs)]);
 
   // The AI Assistant saved something: reload the data behind the affected tabs.
   window.addEventListener("bs:data-changed", (e) => {
     const what = e.detail || [];
     if (what.includes("portfolio")) getJson("/api/analytics").then((a) => { if (a) { analytics = a; window.BSAnalytics = a; } }).catch(() => {});
     if (what.includes("properties") && window.BSProps) window.BSProps.load(true).catch(() => {});
+    if (what.includes("inputs") && window.BSInputs) window.BSInputs.load(true).catch(() => {});
   });
 
   Promise.all([getJson("/api/analytics").catch(() => null), getJson("/api/report").catch(() => null), loadWork])

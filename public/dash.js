@@ -994,7 +994,8 @@
   /* ================= INCOME (gross, estimated taxes and net, plus the calendar-year tax picture) ================= */
   const TAX_DEFAULTS = { ord: 37, qual: 20, state: 4.95, roc: 0, other: 0, niit: true, dedInt: true };
   let taxA = (() => { try { return { ...TAX_DEFAULTS, ...JSON.parse(sessionStorage.getItem("bs-tax") || "{}") }; } catch { return { ...TAX_DEFAULTS }; } })();
-  const saveTax = () => { try { sessionStorage.setItem("bs-tax", JSON.stringify(taxA)); } catch {} };
+  // Rates are shared through the Inputs page (/api/inputs); this browser copy is only a fallback.
+  const saveTax = () => { try { sessionStorage.setItem("bs-tax", JSON.stringify(taxA)); } catch {} if (window.BSInputs && window.BSInputs.saveDashTax) window.BSInputs.saveDashTax(taxA); };
   const CASH_DIV = "Cash dividend (character set on 1099)";
   // Marginal rates by tax character (federal + Illinois + NIIT). Margin interest saves federal tax and NIIT when deducted (not Illinois).
   function taxRates(t = taxA) {
@@ -1303,6 +1304,8 @@
     // Old tab links (#gains, #tax) land on the merged tabs.
     aliases: { gains: "performance", tax: "income" },
     taxRates, itemTax,
+    // The Inputs page pushes the shared rates here (keys: ord, qual, state, roc, niit, dedInt).
+    setTax(o) { for (const [k, v] of Object.entries(o || {})) if (v != null && k in TAX_DEFAULTS) taxA[k] = v; try { sessionStorage.setItem("bs-tax", JSON.stringify(taxA)); } catch {} },
     render(slug, root, A) {
       ({ performance: renderPerformance, income: renderIncome })[slug](root, A);
     },

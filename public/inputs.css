@@ -1,0 +1,10 @@
+/* Inputs, Tax Plan, Valuation */
+.inp table input:not([type="checkbox"]), .inp table select { font: inherit; font-size: 0.85rem; color: #0c1c36; background: #fff; border: 1px solid #c9d4e3; border-radius: 4px; padding: 0.3rem 0.45rem; width: 100%; min-width: 6.5rem; box-sizing: border-box; }
+.inp table input:focus, .inp table select:focus { outline: none; border-color: var(--gold); box-shadow: 0 0 0 3px rgba(201, 162, 98, 0.28); }
+.inp table td { vertical-align: middle; }
+.inp .inp-rr input[type="date"], .inp .inp-loans input[type="date"] { min-width: 9rem; }
+.inp a, .inp .jason a { color: #183763; text-decoration: underline; }
+.inp .inp-nav { position: sticky; top: 0; z-index: 4; background: #f6f8fb; padding: 0.4rem 0; }
+.inp .inp-nav .pb { text-decoration: none; }
+.inp .tax-field input[type="text"] { color: #0c1c36; }
+.inp h4.inc-head .ws-pill { margin-left: 0.5rem; vertical-align: middle; }
