@@ -365,6 +365,9 @@
     if (pos && pos.cash > 0) assets.push({ id: "portfolio-cash", name: "Schwab cash", value: pos.cash, basis: fmtDate(pos.asOf), group: "portfolio" });
     props.forEach((pv) => assets.push({ id: pv.id, name: pv.name, value: pv.value || 0, basis: pv.value ? pv.valueBasis : "no value yet: add a cap rate or value on the Properties tab", missing: !pv.value }));
     if (asm.startCash) assets.push({ id: "cash", name: "Other cash", value: asm.startCash, basis: "Cash Flow assumptions" });
+    // Accounts outside …965 (IRA and others) from the Inputs page.
+    const extra = window.BSInputs && window.BSInputs.accountsForOverview ? window.BSInputs.accountsForOverview() : [];
+    extra.forEach((a) => assets.push({ id: `acct-${a.id}`, name: a.name, value: a.value, basis: `${a.type === "ira" ? "IRA, " : ""}${a.source === "plaid" ? "Plaid" : "entered"} ${fmtDate(a.asOf)}`, group: "accounts" }));
     const totalAssets = sum(assets, (a) => a.value), totalDebt = sum(debtToday, (d) => d.balance);
 
     return { asm, months, rows, tax: tx, props, soon, debts: debtToday, assets, totalAssets, totalDebt, netWorth: totalAssets - totalDebt,
@@ -422,6 +425,7 @@
     if (portA.length) groups.push({ id: "portfolio", name: "Schwab account …965", value: sum(portA, (a) => a.value), basis: portA[0].basis });
     M.props.forEach((p) => { const a = M.assets.find((x) => x.id === p.id); groups.push({ id: p.id, name: p.name, value: a.value, basis: a.basis }); });
     const oc = M.assets.find((a) => a.id === "cash"); if (oc) groups.push({ id: "cash", name: oc.name, value: oc.value, basis: oc.basis });
+    M.assets.filter((a) => a.group === "accounts").forEach((a) => groups.push({ id: a.id, name: a.name, value: a.value, basis: a.basis }));
     const otherDebt = M.debts.filter((d) => !groups.some((g) => g.id === d.secures));
     if (otherDebt.length) groups.push({ id: "other", name: "Other / unsecured debt", value: 0, basis: "" });
     const rows = groups.map((g) => {
