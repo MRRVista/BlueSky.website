@@ -158,7 +158,8 @@
   const aiTabs = () => (window.BSAI ? window.BSAI.tabs.map((t) => ({ ...t, render: (r) => window.BSAI.render(t.slug, r) })) : []);
   const propTabs = () => (window.BSProps ? window.BSProps.tabs.map((t) => ({ ...t, render: (r) => window.BSProps.render(t.slug, r) })) : []);
   const wealthTabs = () => (window.BSWealth ? window.BSWealth.tabs.map((t) => ({ ...t, render: (r) => window.BSWealth.render(t.slug, r) })) : []);
-  const workTabs = () => wealthTabs().concat(aiTabs()).concat(propTabs()).concat(window.BSWork ? window.BSWork.tabs.map((t) => ({ ...t, render: (r) => window.BSWork.render(t.slug, r) })) : []);
+  const splitTabs = () => (window.BSSplit ? window.BSSplit.tabs.map((t) => ({ ...t, render: (r) => window.BSSplit.render(t.slug, r) })) : []);
+  const workTabs = () => wealthTabs().concat(splitTabs()).concat(aiTabs()).concat(propTabs()).concat(window.BSWork ? window.BSWork.tabs.map((t) => ({ ...t, render: (r) => window.BSWork.render(t.slug, r) })) : []);
 
   function show(slug) {
     if (!slug && window.BSWealth) slug = "overview"; // the Overview is the landing page
@@ -207,7 +208,7 @@
     sc.onload = res; sc.onerror = res;
     document.head.append(sc);
   }));
-  const loadWork = Promise.all([loadScript("/props.js", window.BSProps), loadScript("/workspace.js", window.BSWork), loadScript("/ai.js", window.BSAI), loadScript("/wealth.js", window.BSWealth)]);
+  const loadWork = Promise.all([loadScript("/props.js", window.BSProps), loadScript("/workspace.js", window.BSWork), loadScript("/ai.js", window.BSAI), loadScript("/wealth.js", window.BSWealth), loadScript("/split.js", window.BSSplit)]);
 
   // The AI Assistant saved something: reload the data behind the affected tabs.
   window.addEventListener("bs:data-changed", (e) => {
