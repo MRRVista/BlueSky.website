@@ -149,7 +149,7 @@
       const bar = h("div", { class: "toolbar" });
       if (P.canManage) ["brokerage", "bank"].forEach((kind) => bar.append(h("button", { class: "btn-small", type: "button", onclick: () => plaidLink(root, kind) }, kind === "brokerage" ? "Connect a brokerage account" : "Connect a bank account")));
       if (P.items.length) bar.append(h("button", { class: "btn-small ghost", type: "button", onclick: async () => { try { await api("/api/plaid", { op: "refresh" }); toast(root.firstChild, "Balances refreshed."); renderInputs(root); } catch (e) { toast(root.firstChild, e.message, "err"); } } }, "Refresh balances"));
-      if (!P.canManage) bar.append(h("span", { class: "note inline" }, "Matt connects and disconnects accounts."));
+      if (!P.canManage) bar.append(h("span", { class: "note inline" }, "Matt and Jen connect and disconnect accounts."));
       kids.push(bar);
       box.replaceChildren(...kids);
     }).catch((e) => box.replaceChildren(h("h3", {}, "Bank and brokerage connections (Plaid)"), h("p", { class: "note" }, e.message)));
