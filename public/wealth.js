@@ -99,9 +99,10 @@
   let cache = null;
   async function loadAll(force) {
     if (cache && !force) return cache;
-    const [loans, plan] = await Promise.all([api("/api/loans").catch(() => null), api("/api/plan").catch(() => ({ version: 0, assumptions: {}, items: [] })), window.BSProps ? window.BSProps.load(force).catch(() => null) : null]);
+    const [loans, plan] = await Promise.all([api("/api/loans").catch(() => null), api("/api/plan").catch(() => ({ version: 0, assumptions: {}, items: [] })), window.BSProps ? window.BSProps.load(force).catch(() => null) : null,
+      window.BSBalance ? window.BSBalance.load(force).catch(() => null) : null]);
     saved = plan;
-    cache = { loans, props: window.BSProps && window.BSProps.data, analytics: window.BSAnalytics || null };
+    cache = { loans, props: window.BSProps && window.BSProps.data, analytics: window.BSAnalytics || null, balance: window.BSBalance && window.BSBalance.data };
     return cache;
   }
   window.addEventListener("bs:data-changed", () => { cache = null; });
@@ -220,8 +221,8 @@
     const props = D ? (D.order || Object.keys(D.properties)).filter((id) => D.properties[id].status === "active").map((id) => propertyView(id, D)) : [];
     const soon = D ? (D.order || Object.keys(D.properties)).filter((id) => D.properties[id].status !== "active").map((id) => D.properties[id].name) : [];
 
-    // debts
-    const debts = debtList(L, D, an, asm);
+    // debts (the balance sheet drops removed loans, applies Plaid balances and adds liabilities entered on the Overview)
+    const debts = window.BSBalance && ctx.balance ? window.BSBalance.adjustDebts(debtList(L, D, an, asm)) : debtList(L, D, an, asm);
 
     // custom cash flows
     const custom = items().filter((i) => i.on !== false);
@@ -370,8 +371,16 @@
     extra.forEach((a) => assets.push({ id: `acct-${a.id}`, name: a.name, value: a.value, basis: `${a.type === "ira" ? "IRA, " : ""}${a.source === "plaid" ? "Plaid" : "entered"} ${fmtDate(a.asOf)}`, group: "accounts" }));
     const totalAssets = sum(assets, (a) => a.value), totalDebt = sum(debtToday, (d) => d.balance);
 
-    return { asm, months, rows, tax: tx, props, soon, debts: debtToday, assets, totalAssets, totalDebt, netWorth: totalAssets - totalDebt,
+    const M = { asm, months, rows, tax: tx, props, soon, debts: debtToday, assets, totalAssets, totalDebt, netWorth: totalAssets - totalDebt,
       mv0, inc0, incBasis, pos, PT, R, custom, startYM };
+    // Today's totals follow the balance sheet (rows removed there, Plaid accounts and manual entries added there).
+    if (window.BSBalance && ctx.balance) {
+      try { const T = window.BSBalance.compute(M); M.totalAssets = T.totalAssets; M.totalDebt = T.totalLiab; M.netWorth = T.netWorth; M.otherAssets = T.totalAssets - (mv0 + (pos && pos.cash > 0 ? pos.cash : 0)) - sum(props, (p) => p.value || 0) - (asm.startCash || 0);
+        // Accounts outside the forecast (IRAs, bank accounts, anything added by hand) are carried at today's value.
+        rows.forEach((r) => { r.otherAssets = M.otherAssets; r.netWorth += M.otherAssets; }); }
+      catch (e) { console.error("balance sheet totals", e); }
+    }
+    return M;
   }
 
   // Sum a window of model rows into a statement by entity.
@@ -390,7 +399,9 @@
     return { ids, cols, tot, months: rs.length };
   }
 
-  window.BSWealthModel = { buildModel, statement, DEFAULTS }; // for testing
+  // Today's model and the next 12 months, for the Properties tab's metrics (same numbers as the Overview).
+  async function snapshot(force) { const ctx = await loadAll(force); const M = buildModel(ctx, A()); return { M, Y1: statement(M, 0, 12), ctx }; }
+  window.BSWealthModel = { buildModel, statement, DEFAULTS, snapshot }; // also for testing
 
   /* ======================= OVERVIEW ======================= */
   const entName = (M, id) => (id === "portfolio" ? "Portfolio" : id === "other" ? "Other" : (M.props.find((p) => p.id === id) || {}).name || id);
@@ -401,52 +412,38 @@
     let ctx;
     try { ctx = await loadAll(true); } catch (e) { if (e.message !== "signed out") root.replaceChildren(sheet("Overview", e.message)); return; }
     const M = buildModel(ctx, A());
-    const s = sheet("Overview", "Everything Jen owns and owes in one place: the Schwab account, 5100 Main and 333 Chestnut, and every loan on the Admin tab, with the next 12 months of cash flow after estimated taxes.");
+    const s = sheet("Overview", "Everything Jen owns and owes in one place: the Schwab account, the properties, every loan and any account added from Plaid, with the next 12 months of cash flow after estimated taxes.");
     const Y1 = statement(M, 0, 12);
+    const toast = (msg, kind = "ok") => { const t = h("div", { class: `ws-toast ${kind}`, role: "status" }, msg); s.prepend(t); setTimeout(() => t.remove(), kind === "err" ? 7000 : 2500); };
+    const BS = window.BSBalance && ctx.balance ? window.BSBalance.render(M, () => renderOverview(root), toast) : null;
+    const T = BS ? BS.totals : { totalAssets: M.totalAssets, totalLiab: M.totalDebt, netWorth: M.netWorth };
+    const realEstate = BS ? sum(T.assets.filter((a) => a.key.startsWith("sys:prop:") || ["home", "reresi", "reoffice", "remedical", "reretail", "remixed", "strental", "realestate2"].includes(a.type)), (a) => a.value) : sum(M.props, (p) => p.value || 0);
 
     s.append(kpis([
-      { label: "Net worth", value: usdK(M.netWorth), sub: `${usdK(M.totalAssets)} assets − ${usdK(M.totalDebt)} debt`, lead: true },
-      { label: "Total assets", value: usdK(M.totalAssets), sub: `portfolio ${usdK(sum(M.assets.filter((a) => a.id === "portfolio" || a.group === "portfolio"), (a) => a.value))}, real estate ${usdK(sum(M.props, (p) => p.value || 0))}` },
-      { label: "Total debt", value: usdK(M.totalDebt), sub: M.totalDebt ? `${pct(sum(M.debts, (d) => d.balance * d.rate / 100) / M.totalDebt, 2)} weighted rate` : "" },
-      { label: "Debt to assets", value: pct(M.totalAssets ? M.totalDebt / M.totalAssets : null), sub: "leverage across everything" },
+      { label: "Net worth", value: usdK(T.netWorth), sub: `${usdK(T.totalAssets)} assets − ${usdK(T.totalLiab)} liabilities`, lead: true },
+      { label: "Total assets", value: usdK(T.totalAssets), sub: `real estate ${usdK(realEstate)}, everything else ${usdK(T.totalAssets - realEstate)}` },
+      { label: "Total liabilities", value: usdK(T.totalLiab), sub: M.totalDebt ? `${pct(sum(M.debts, (d) => d.balance * d.rate / 100) / M.totalDebt, 2)} weighted rate` : "" },
+      { label: "Debt to assets", value: pct(T.totalAssets ? T.totalLiab / T.totalAssets : null), sub: "leverage across everything" },
       { label: "Cash flow, next 12 months", value: usd(Y1.tot.net), sub: `after ${usd(Y1.tot.tax)} estimated taxes; ${usd(Y1.tot.net / 12)} a month`, lead: true },
     ]));
+    if (window.BSAttention) s.append(window.BSAttention.box(M, ctx, BS && BS.totals));
     const warn = [];
-    M.assets.filter((a) => a.missing).forEach((a) => warn.push(`${a.name} has no value yet. Add a market cap rate (with rent and expenses) or a current value on the Properties tab.`));
-    M.debts.filter((d) => d.guessed && d.secures !== "portfolio").forEach((d) => warn.push(`${d.name} isn't tied to an asset; it's counted under ${securedName(M, d.secures)}. Set "Secured by" on the Admin tab.`));
     if (M.soon.length) warn.push(`${M.soon.join(" and ")} ${M.soon.length > 1 ? "aren't" : "isn't"} switched on yet, so ${M.soon.length > 1 ? "they're" : "it's"} not included. Switch it on from the Properties tab.`);
-    if (!M.pos) warn.push("No Schwab positions export is on file, so the portfolio isn't included. Upload one on the Upload page.");
+    if (!M.pos) warn.push("No Schwab positions are on file, so the portfolio isn't included. Upload a positions export on the Upload page, or tag the Schwab account to Plaid.");
     if (warn.length) s.append(h("ul", { class: "ov-warn" }, warn.map((w) => h("li", {}, w))));
 
     // Balance sheet
-    s.append(section("Balance sheet", "Today's values. Real estate is valued from net operating income and the cap rate set on the Properties tab, or the value entered there."));
-    const groups = [];
-    const portA = M.assets.filter((a) => a.id === "portfolio" || a.group === "portfolio");
-    if (portA.length) groups.push({ id: "portfolio", name: "Schwab account …965", value: sum(portA, (a) => a.value), basis: portA[0].basis });
-    M.props.forEach((p) => { const a = M.assets.find((x) => x.id === p.id); groups.push({ id: p.id, name: p.name, value: a.value, basis: a.basis }); });
-    const oc = M.assets.find((a) => a.id === "cash"); if (oc) groups.push({ id: "cash", name: oc.name, value: oc.value, basis: oc.basis });
-    M.assets.filter((a) => a.group === "accounts").forEach((a) => groups.push({ id: a.id, name: a.name, value: a.value, basis: a.basis }));
-    const otherDebt = M.debts.filter((d) => !groups.some((g) => g.id === d.secures));
-    if (otherDebt.length) groups.push({ id: "other", name: "Other / unsecured debt", value: 0, basis: "" });
-    const rows = groups.map((g) => {
-      const debt = g.id === "other" ? sum(otherDebt, (d) => d.balance) : sum(M.debts.filter((d) => d.secures === g.id), (d) => d.balance);
-      return { ...g, debt, equity: g.value - debt };
-    });
-    s.append(table([
-      { label: "Asset", get: (r) => (r.total ? h("strong", {}, "Total") : r.name) },
-      { label: "Value", num: 1, get: (r) => usd(r.value) },
-      { label: "Debt against it", num: 1, get: (r) => (r.debt ? usd(-r.debt) : "—"), raw: (r) => -r.debt },
-      { label: "Equity", num: 1, get: (r) => usd(r.equity), raw: (r) => r.equity },
-      { label: "Loan to value", num: 1, get: (r) => (r.value && r.debt ? pct(r.debt / r.value) : "—") },
-      { label: "Share of net worth", num: 1, get: (r) => (M.netWorth ? pct(r.equity / M.netWorth) : "—") },
-      { label: "Value basis", get: (r) => h("span", { class: "muted small" }, r.basis || "") },
-    ], rows.concat([{ total: true, _class: "sum", value: M.totalAssets, debt: M.totalDebt, equity: M.netWorth }])));
-    const { box, canvas } = chartBox(Math.max(160, rows.length * 56 + 60));
-    s.append(box);
-    draw(canvas, { type: "bar", data: { labels: rows.map((r) => r.name), datasets: [
-      { label: "Equity", data: rows.map((r) => Math.max(r.equity, 0)), backgroundColor: C.gold, stack: "a" },
-      { label: "Debt", data: rows.map((r) => r.debt), backgroundColor: C.slate, stack: "a" },
-    ] }, options: { indexAxis: "y", responsive: true, maintainAspectRatio: false, plugins: { tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${usd(c.raw)}` } } }, scales: { x: { stacked: true, ticks: { callback: moneyTick } }, y: { stacked: true } } } });
+    s.append(section("Balance sheet", "Today's values. Assets on top, liabilities below. Drag rows (or use the arrows) to reorder; link each liability to the asset it's against. Real estate is valued from net operating income and the cap rate on the Properties tab, or the value entered there."));
+    if (BS) s.append(BS.el);
+    const rows = BS ? T.assets.map((a) => ({ name: a.name, equity: a.equity, debt: a.debt })) : [];
+    if (rows.length) {
+      const { box, canvas } = chartBox(Math.max(160, rows.length * 48 + 60));
+      s.append(box);
+      draw(canvas, { type: "bar", data: { labels: rows.map((r) => r.name), datasets: [
+        { label: "Equity", data: rows.map((r) => Math.max(r.equity, 0)), backgroundColor: C.gold, stack: "a" },
+        { label: "Debt", data: rows.map((r) => r.debt), backgroundColor: C.slate, stack: "a" },
+      ] }, options: { indexAxis: "y", responsive: true, maintainAspectRatio: false, plugins: { tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${usd(c.raw)}` } } }, scales: { x: { stacked: true, ticks: { callback: moneyTick } }, y: { stacked: true } } } });
+    }
 
     // Next 12 months by entity
     s.append(section(`Cash flow, ${ymLabel(M.months[0])} – ${ymLabel(M.months[Math.min(11, M.months.length - 1)])}`, "Projected from today's holdings, the property ledgers or pro forma, and each loan's schedule. Taxes are estimated with the Income tab's rates; rental income is treated as " + (M.asm.rentalTax === "passive" ? "passive (losses carried forward)." : "able to offset other income.")));
@@ -458,10 +455,10 @@
     if (M.soon.length) s.append(section(M.soon.join(", "), "Not switched on yet. Switch it on from the Properties tab to enter its building, rent, expenses and mortgage; it then joins this page and the forecast."));
 
     // Debt
-    s.append(section("Debt", "Every open loan, with what secures it. Payments are principal and interest; escrow is left out because taxes and insurance are counted as property expenses."));
+    s.append(section("Debt", "Every open loan and the asset it's linked to. Payments are principal and interest; escrow is left out because taxes and insurance are counted as property expenses."));
     s.append(table([
       { label: "Loan", get: (r) => (r.total ? h("strong", {}, "Total") : h("span", {}, h("strong", {}, r.name), r.lender ? h("span", { class: "muted" }, ` ${r.lender}`) : null)) },
-      { label: "Secured by", get: (r) => (r.total ? "" : securedName(M, r.secures) + (r.guessed && r.secures !== "portfolio" ? " (assumed)" : "")) },
+      { label: "Linked to", get: (r) => (r.total ? "" : r.linkedRow && BS ? ((BS.totals.assets.find((a) => a.key === r.linkedRow) || {}).name || "—") : r.secures === "other" ? "Not linked" : securedName(M, r.secures)) },
       { label: "Balance", num: 1, get: (r) => usd(r.balance) },
       { label: "Rate", num: 1, get: (r) => (r.total ? pct(r.rate / 100, 2) : `${pct(r.rate / 100, 2)}${r.floating ? " float" : ""}`) },
       { label: "Payment / month", num: 1, get: (r) => (r.payment ? usd(r.payment) : r.total ? "" : usd((r.balance * r.rate) / 1200 * (r.dayBasis === 360 ? 365 / 360 : 1)) + " int.") },
@@ -635,8 +632,8 @@
     s.append(section("Net worth path", `Portfolio grows ${asm.priceGrowth}% a year, real estate ${asm.valueGrowth}% a year; loans follow their schedules and cash builds from the forecast.`));
     const { box: b3, canvas: c3 } = chartBox(300);
     s.append(b3);
-    const pts = [{ label: "Today", port: M.mv0 + (M.pos && M.pos.cash > 0 ? M.pos.cash : 0), prop: sum(M.props, (p) => p.value || 0), cash: asm.startCash || 0, debt: M.totalDebt, nw: M.netWorth }]
-      .concat(yr.map((x) => ({ label: x.y, port: x.end.portValue, prop: x.end.propValue, cash: x.end.cash, debt: x.end.debtBal, nw: x.end.netWorth })));
+    const pts = [{ label: "Today", port: M.mv0 + (M.pos && M.pos.cash > 0 ? M.pos.cash : 0), prop: sum(M.props, (p) => p.value || 0), cash: (asm.startCash || 0) + (M.otherAssets || 0), debt: M.totalDebt, nw: M.netWorth }]
+      .concat(yr.map((x) => ({ label: x.y, port: x.end.portValue, prop: x.end.propValue, cash: x.end.cash + (M.otherAssets || 0), debt: x.end.debtBal, nw: x.end.netWorth })));
     draw(c3, { type: "bar", data: { labels: pts.map((p) => (p.label === "Today" ? "Today" : `End ${p.label}`)), datasets: [
       { label: "Portfolio", data: pts.map((p) => p.port), backgroundColor: C.green, stack: "n" },
       { label: "Real estate", data: pts.map((p) => p.prop), backgroundColor: C.gold, stack: "n" },

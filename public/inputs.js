@@ -101,7 +101,7 @@
   /* ----- accounts + Plaid ----- */
   function accountsSection(root, I) {
     const wrap = h("div", { "data-sec": "Accounts" });
-    wrap.append(section("Accounts", "Accounts outside the main Schwab account (…965, which comes from the Schwab uploads). They count toward net worth on the Overview. IRA balances aren't taxed until withdrawn."));
+    wrap.append(section("Accounts", "Accounts the tax plan reads (IRAs and others outside …965). They also show on the Overview's balance sheet, where each can be tagged to a Plaid account. IRA balances aren't taxed until withdrawn."));
     const rows = I.accounts.map((a) => ({ ...a }));
     const T = ["ira", "IRA"], types = [T, ["roth", "Roth IRA"], ["taxable", "Taxable brokerage"], ["bank", "Bank"], ["other", "Other"]];
     const tbl = h("table", { class: "grid dgrid" });
@@ -124,57 +124,79 @@
     return wrap;
   }
   function plaidPanel(root, I) {
-    const box = h("div", { class: "ws-add" }, h("h3", {}, "Bank and brokerage connections (Plaid)"), h("p", { class: "note" }, "Loading…"));
+    const title = "Connections (Plaid)";
+    const box = h("div", { class: "ws-add" }, h("h3", {}, title), h("p", { class: "note" }, "Loading…"));
     api("/api/plaid").then((P) => {
-      const kids = [h("h3", {}, "Bank and brokerage connections (Plaid)")];
+      const kids = [h("h3", {}, title)];
       if (!P.configured) {
         kids.push(h("p", { class: "note" }, "Plaid is built in but not switched on: add PLAID_SECRET (the same value vistarandall uses) to this site's Vercel project. For Schwab and other banks that sign in through their own site, also set PLAID_REDIRECT_URI to https://bluesky.website/home and add that address to the allowed redirect URIs in the Plaid dashboard."));
         box.replaceChildren(...kids); return;
       }
-      kids.push(h("p", { class: "note" }, `Balances refresh on demand. Link a Plaid account to an account above and its value updates on every refresh.${P.env === "sandbox" ? " (Sandbox mode.)" : ""}`));
-      const opts = [["", "— not linked —"]].concat(P.items.flatMap((it) => (it.accounts || []).map((a) => [a.id, `${it.institution} ${a.name} …${a.mask || ""}`])));
+      kids.push(h("p", { class: "note" }, `One button connects any bank, card, brokerage, retirement account or loan. The first sync brings in 24 months of transactions, which stay on the Transactions tab for good. Tag accounts to rows on the Overview's balance sheet and to properties on the Properties tab. Everything refreshes every morning.${P.env === "sandbox" ? " (Sandbox mode.)" : ""}`));
+      if (P.archive) kids.push(h("p", { class: "note" }, `${P.archive.count.toLocaleString()} transactions stored${P.archive.syncedAt ? `, last sync ${fmtWhen(P.archive.syncedAt)}` : ""}. `, h("a", { href: "#transactions", class: "dark-link" }, "Open the Transactions tab")));
       P.items.forEach((it) => {
-        kids.push(h("h4", { class: "inc-head" }, `${it.institution}`, h("span", { class: "muted small" }, ` · ${it.kind} · refreshed ${fmtWhen(it.refreshedAt)}`), it.error ? h("span", { class: "warn-text small" }, ` · ${it.error}`) : null,
-          P.canManage ? h("button", { class: "link-button danger", type: "button", onclick: async () => { if (!confirm(`Disconnect ${it.institution}?`)) return; try { await api("/api/plaid", { op: "remove", itemId: it.itemId }); renderInputs(root); } catch (e) { toast(root.firstChild, e.message, "err"); } } }, " Disconnect") : null));
+        const pill = it.needsLogin ? h("span", { class: "warn-text small" }, " · sign-in expired") : it.needsUpgrade ? h("span", { class: "warn-text small" }, " · connected before the single button: 90 days of history, one product") : it.error ? h("span", { class: "warn-text small" }, ` · ${it.error}`) : null;
+        kids.push(h("h4", { class: "inc-head" }, `${it.institution}`,
+          h("span", { class: "muted small" }, ` · ${(it.products || []).join(", ")} · ${it.transactions.toLocaleString()} transactions · refreshed ${fmtWhen(it.refreshedAt)}`), pill));
+        if ((it.missing || []).length) kids.push(h("p", { class: "note" }, `Not shared by this connection: ${it.missing.join(", ")}. Reconnect to add ${it.missing.length === 1 ? "it" : "them"}.`));
+        if ((it.notes || []).length) kids.push(h("p", { class: "note" }, `Last sync: ${it.notes.join("; ")}.`));
         kids.push(table([
           { label: "Account", get: (a) => `${a.name} …${a.mask || ""}` }, { label: "Type", get: (a) => `${a.type}${a.subtype ? " / " + a.subtype : ""}` },
           { label: "Balance", num: 1, get: (a) => usd(a.current, 2) }, { label: "Holdings", num: 1, get: (a) => (a.holdings ? a.holdings.length : "") },
+          { label: "Loan detail", get: (a) => (a.liability ? `${a.liability.rate != null ? a.liability.rate + "%" : ""}${a.liability.nextDue ? ` · next due ${a.liability.nextDue}` : ""}` : "") },
         ], it.accounts || []));
-      });
-      I.accounts.forEach((a) => {
-        const s1 = sel(opts, a.plaidAccountId || "");
-        s1.addEventListener("change", async () => { try { await api("/api/plaid", { op: "match", accountId: a.id, plaidAccountId: s1.value }); toast(root.firstChild, "Linked."); load(true); } catch (e) { toast(root.firstChild, e.message, "err"); } });
-        if (P.items.length) kids.push(h("div", { class: "toolbar" }, h("span", { class: "muted" }, `${a.name}:`), s1));
+        if (P.canManage) kids.push(h("div", { class: "toolbar" },
+          it.needsLogin ? h("button", { class: "btn-small", type: "button", onclick: () => plaidLink(root, { itemId: it.itemId, mode: "update" }) }, "Fix the sign-in") : null,
+          it.needsUpgrade || (it.missing || []).length ? h("button", { class: "btn-small", type: "button", onclick: () => plaidLink(root, { itemId: it.itemId }) }, "Reconnect for full access") : null,
+          h("button", { class: "link-button danger", type: "button", onclick: async () => { if (!confirm(`Disconnect ${it.institution}? Its stored transactions stay on the Transactions tab.`)) return; try { await api("/api/plaid", { op: "remove", itemId: it.itemId }); renderInputs(root); } catch (e) { toast(root.firstChild, e.message, "err"); } } }, "Disconnect")));
       });
       const bar = h("div", { class: "toolbar" });
-      if (P.canManage) ["brokerage", "bank"].forEach((kind) => bar.append(h("button", { class: "btn-small", type: "button", onclick: () => plaidLink(root, kind) }, kind === "brokerage" ? "Connect a brokerage account" : "Connect a bank account")));
-      if (P.items.length) bar.append(h("button", { class: "btn-small ghost", type: "button", onclick: async () => { try { await api("/api/plaid", { op: "refresh" }); toast(root.firstChild, "Balances refreshed."); renderInputs(root); } catch (e) { toast(root.firstChild, e.message, "err"); } } }, "Refresh balances"));
+      if (P.canManage) bar.append(h("button", { class: "btn-small", type: "button", onclick: () => plaidLink(root, {}) }, "Connect an account"));
+      const refresh = (live) => async (e) => {
+        e.target.disabled = true; const t0 = e.target.textContent; e.target.textContent = "Refreshing…";
+        try { const r = await api("/api/plaid", { op: "refresh", live }); toast(root.firstChild, live ? "Live balances and transactions refreshed." : "Transactions synced."); window.dispatchEvent(new CustomEvent("bs:data-changed", { detail: ["balance", "properties", "portfolio", "inputs"] })); renderInputs(root); }
+        catch (err) { toast(root.firstChild, err.message, "err"); e.target.disabled = false; e.target.textContent = t0; }
+      };
+      if (P.items.length) bar.append(h("button", { class: "btn-small ghost", type: "button", onclick: refresh(false) }, "Sync transactions"), h("button", { class: "btn-small ghost", type: "button", title: "Asks each bank for this minute's balance (Plaid bills each live check)", onclick: refresh(true) }, "Refresh live balances"));
       if (!P.canManage) bar.append(h("span", { class: "note inline" }, "Matt and Jen connect and disconnect accounts."));
       kids.push(bar);
       box.replaceChildren(...kids);
-    }).catch((e) => box.replaceChildren(h("h3", {}, "Bank and brokerage connections (Plaid)"), h("p", { class: "note" }, e.message)));
+    }).catch((e) => box.replaceChildren(h("h3", {}, title), h("p", { class: "note" }, e.message)));
     return box;
   }
   function loadPlaidScript() {
     return window.Plaid ? Promise.resolve() : new Promise((res, rej) => { const sc = h("script", { src: "https://cdn.plaid.com/link/v2/stable/link-initialize.js" }); sc.onload = res; sc.onerror = () => rej(new Error("Plaid Link didn't load.")); document.head.append(sc); });
   }
-  async function plaidLink(root, kind, oauth) {
+  // opts: {} new connection · { itemId } reconnect that institution for full access · { itemId, mode: "update" } fix its sign-in
+  async function plaidLink(root, opts, oauth) {
+    const say = (m, k) => toast((root && root.firstChild) || document.body, m, k);
     try {
       await loadPlaidScript();
-      const tok = oauth ? JSON.parse(sessionStorage.getItem("bs-plaid-link") || "null") : await api("/api/plaid", { op: "linkToken", kind });
+      const tok = oauth ? JSON.parse(sessionStorage.getItem("bs-plaid-link") || "null") : await api("/api/plaid", { op: "linkToken", itemId: opts.itemId || null, mode: opts.mode || null });
       if (!tok) return;
       try { sessionStorage.setItem("bs-plaid-link", JSON.stringify(tok)); } catch {}
       const handler = window.Plaid.create({ token: tok.linkToken, receivedRedirectUri: oauth ? location.href : undefined,
         onSuccess: async (publicToken, meta) => {
-          try { await api("/api/plaid", { op: "exchange", publicToken, institution: meta.institution && meta.institution.name, kind: tok.kind }); sessionStorage.removeItem("bs-plaid-link"); if (oauth) history.replaceState(null, "", "/home#inputs"); renderInputs(root); }
-          catch (e) { toast(root.firstChild, e.message, "err"); }
+          try {
+            if (oauth) history.replaceState(null, "", "/home#inputs");
+            say(tok.mode === "update" ? "Sign-in fixed. Syncing…" : "Connected. Bringing in up to 24 months of transactions; this can take a minute…");
+            if (tok.mode === "update") await api("/api/plaid", { op: "refresh" });
+            else {
+              const r = await api("/api/plaid", { op: "exchange", publicToken, institution: meta.institution && meta.institution.name, institutionId: meta.institution && meta.institution.institution_id, replaceItemId: tok.replaceItemId });
+              if (r.summary) say(r.summary.replaced ? `${r.summary.connected} reconnected; its history and tags carried over.` : `${r.summary.connected} connected: ${r.summary.accounts} account${r.summary.accounts === 1 ? "" : "s"}. Add them on the Overview's balance sheet.`);
+            }
+            try { sessionStorage.removeItem("bs-plaid-link"); } catch {}
+            window.dispatchEvent(new CustomEvent("bs:data-changed", { detail: ["balance", "properties", "portfolio", "inputs"] }));
+            // The first sync can take a while; only redraw if they're still on the Inputs tab.
+            if (/^#inputs\b/.test(location.hash || "")) renderInputs(root || document.getElementById("report"));
+          } catch (e) { say(e.message, "err"); }
         },
-        onExit: (err) => { if (err) toast(root.firstChild, err.display_message || err.error_message || "Plaid closed.", "err"); } });
+        onExit: (err) => { if (err) say(err.display_message || err.error_message || "Plaid closed.", "err"); } });
       handler.open();
-    } catch (e) { toast(root.firstChild, e.message, "err"); }
+    } catch (e) { say(e.message, "err"); }
   }
   // Returning from an OAuth bank (Schwab): resume Link.
-  if (/[?&]oauth_state_id=/.test(location.search)) { location.hash = "#inputs"; setTimeout(() => plaidLink(document.getElementById("report"), null, true), 1200); }
+  if (/[?&]oauth_state_id=/.test(location.search)) { location.hash = "#inputs"; setTimeout(() => plaidLink(document.getElementById("report"), {}, true), 1200); }
 
   /* ----- properties ----- */
   async function propertiesSection(root, D, I, L) {
@@ -376,6 +398,37 @@
 
   /* ======================= TAX PLAN ======================= */
   let annualize = (() => { try { return sessionStorage.getItem("bs-tax-ann") !== "0"; } catch { return true; } })();
+  // Tax lots rebuilt from the Schwab history (and Plaid trades after the last Schwab export).
+  function lotsSection() {
+    const L = window.BSAnalytics && window.BSAnalytics.lots;
+    const wrap = h("div");
+    if (!L || L.error) { wrap.append(section("Tax lots", L && L.error ? `The lots couldn't be rebuilt: ${L.error}` : "No Schwab transactions are on file yet.")); return wrap; }
+    const pos = (window.BSAnalytics.positions && window.BSAnalytics.positions.holdings) || [];
+    const price = Object.fromEntries(pos.map((x) => [x.symbol, x.price || (x.quantity ? x.marketValue / x.quantity : 0)]));
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+    wrap.append(section("Tax lots", `Rebuilt from every Schwab transaction since ${L.firstDate}. Sales Schwab reported in its Realized Gain/Loss export use Schwab's lots; any other sale closes lots the way Schwab's Tax Lot Optimizer does (short-term losses first, then long-term losses, then gains, highest cost first). Checked against the ${L.asOf} holdings${window.BSAnalytics.positions && window.BSAnalytics.positions.source === "plaid" ? " (from Plaid)" : " (Schwab positions export)"}.`));
+    const symbolsChecked = new Set(pos.map((x) => x.symbol));
+    wrap.append(h("p", { class: "note" }, L.checks.length ? "" : `All ${symbolsChecked.size} holdings match the share counts and cost basis on file.`,
+      (L.aligned || []).length ? ` Wash-sale adjustments Schwab added to replacement shares (${usd(sum(L.aligned, (a) => a.amount))} across ${L.aligned.length} holdings) are carried on the lots bought around those sales.` : "",
+      (L.estimatedSymbols || []).length ? ` Estimated cost on ${L.estimatedSymbols.join(", ")} (shares that came in without a purchase record).` : ""));
+    if (L.checks.length) wrap.append(h("ul", { class: "ov-warn" }, L.checks.map((c) => h("li", {}, `${c.symbol}: ${c.issue}`))));
+    if ((L.afterFile || []).length) {
+      wrap.append(h("h4", { class: "inc-head" }, `Sales after Schwab's ${L.lastFileTo ? `${L.lastFileTo} ` : ""}realized export`), h("p", { class: "note" }, "Counted in this estimate until a newer Schwab Realized Gain/Loss export covers them; then Schwab's figures replace these."),
+        table([{ label: "Symbol", get: (c) => c.symbol }, { label: "Opened", get: (c) => c.opened || "—" }, { label: "Sold", get: (c) => c.closed }, { label: "Shares", num: 1, get: (c) => c.qty.toFixed(4).replace(/\.?0+$/, "") },
+          { label: "Proceeds", num: 1, get: (c) => usd(c.proceeds) }, { label: "Cost", num: 1, get: (c) => usd(c.cost) }, { label: "Gain", num: 1, get: (c) => usd(c.gain), raw: (c) => c.gain }, { label: "Term", get: (c) => c.term },
+          { label: "Wash sale?", get: (c) => (c.wash ? h("span", { class: "warn-text" }, c.washNote || "possible") : "") }], L.afterFile));
+    }
+    const lots = L.openLots.map((l) => { const v = price[l.symbol] ? l.qty * price[l.symbol] : null; return { ...l, value: v, gain: v != null ? v - l.cost : null, lt: l.longTermFrom && l.longTermFrom <= today }; });
+    const g = (f) => sum(lots.filter(f), (l) => l.gain || 0);
+    const d = h("details", { class: "ws-add" }, h("summary", {}, `${lots.length} open lots · unrealized short-term ${usd(g((l) => !l.lt))}, long-term ${usd(g((l) => l.lt))} · losses available to harvest ${usd(g((l) => (l.gain || 0) < 0))}`));
+    d.append(table([{ label: "Symbol", get: (l) => l.symbol }, { label: "Opened", get: (l) => l.opened || "—" }, { label: "Shares", num: 1, get: (l) => l.qty.toLocaleString("en-US", { maximumFractionDigits: 4 }) },
+      { label: "Cost / share", num: 1, get: (l) => usd(l.perShare, 2) }, { label: "Cost", num: 1, get: (l) => usd(l.cost) }, { label: "Value", num: 1, get: (l) => usd(l.value) },
+      { label: "Gain", num: 1, get: (l) => usd(l.gain), raw: (l) => l.gain }, { label: "Term", get: (l) => (l.lt ? "Long" : `Short (long from ${l.longTermFrom})`) },
+      { label: "", get: (l) => h("span", { class: "muted small" }, [l.estimated ? "estimated cost" : "", l.basisAdj ? `incl. ${usd(l.basisAdj, 2)} wash adj.` : ""].filter(Boolean).join(" · ")) }], lots));
+    wrap.append(d);
+    return wrap;
+  }
+
   async function renderTaxPlan(root) {
     root.replaceChildren(sheet("Tax Plan", "Loading…"));
     let X;
@@ -401,6 +454,7 @@
     lines("Capital gains and losses (Schedule D)", [
       line("Short-term realized", Cp.st), line("Long-term realized", Cp.lt), line("Capital gain distributions and other gains", Cp.netLT - Cp.lt + Cp.ltCF), line("Short-term loss carried in", -Cp.stCF), line("Long-term loss carried in", -Cp.ltCF),
       line("Net capital gain / (loss)", Cp.net, "sum"), line("Taxed at long-term rates", Cp.prefGain), line("Loss deducted against ordinary income", -Cp.lossDeduction), line("Loss carried to next year", -(Cp.carryST + Cp.carryLT), "total")]);
+    s.append(lotsSection());
     s.append(section("Rentals (Schedule E)", "Rent and expenses from the rent roll and expense inputs; mortgage interest from each loan's schedule, split between rental and investment use; depreciation straight-line plus any cost segregation and bonus."));
     s.append(table([
       { label: "", get: (r) => h("strong", {}, r.name) }, { label: "Rent (after vacancy)", num: 1, get: (r) => usd(r.rent) }, { label: "Operating expenses", num: 1, get: (r) => usd(-r.opex), raw: (r) => -r.opex },

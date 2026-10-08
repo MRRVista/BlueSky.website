@@ -17,6 +17,16 @@ function replaceTransactions(oldTx, newTx) {
   return { list: kept.concat(newTx).sort((a, b) => b.date.localeCompare(a.date)), from, to, removed: oldTx.length - kept.length };
 }
 
+// Schwab-covered date ranges; Plaid rows only fill dates outside them.
+function mergeRanges(list) {
+  const out = [];
+  list.slice().sort((a, b) => a.from.localeCompare(b.from)).forEach((r) => {
+    const last = out[out.length - 1];
+    if (last && r.from <= new Date(Date.parse(last.to) + 864e5).toISOString().slice(0, 10)) { if (r.to > last.to) last.to = r.to; } else out.push({ ...r });
+  });
+  return out;
+}
+
 const TYPE_LABEL = { transactions: "Transactions", positions: "Positions", realized: "Realized Gain/Loss", income: "Investment Income", balances: "Balances" };
 
 function upsertValuation(p, v) {
@@ -51,8 +61,14 @@ export default async function handler(req, res) {
     try {
       if (type === "transactions") {
         const tx = parseTransactions(text);
+        if (!Array.isArray(p.txRanges)) {
+          // First upload since ranges were tracked: everything already on file counts as covered.
+          const d = p.transactions.filter((x) => x.source !== "plaid").map((x) => x.date).sort();
+          p.txRanges = d.length ? [{ from: d[0], to: d[d.length - 1] }] : [];
+        }
         const r = replaceTransactions(p.transactions, tx);
         p.transactions = r.list;
+        if (r.from) p.txRanges = mergeRanges(p.txRanges.concat([{ from: r.from, to: r.to }]));
         results.push({ name, type, ok: true, message: r.from ? `${tx.length} transactions from ${r.from} to ${r.to} now replace the ${r.removed} stored for those dates. Earlier history is kept (${p.transactions.length} in total).` : "No transaction rows found in this file." });
       } else if (type === "realized") {
         const r = parseRealized(text);

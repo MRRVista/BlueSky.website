@@ -293,6 +293,7 @@
 
   /* ---------------- drawing ---------------- */
   let histEl = null, chipsEl = null, lastCount = 0;
+  let leasesOpen = false, leaseBox = null;
   function paintHistory() {
     if (!histEl) return;
     histEl.replaceChildren(...(history.length ? history.map((x) => h("div", { class: "ai-hist-item" },
@@ -344,8 +345,14 @@
     const hist = h("details", { class: "ai-hist" }, h("summary", { class: "btn-small ghost" }, "History"));
     histEl = h("div", { class: "ai-hist-list" });
     hist.append(histEl);
-    top.append(hist, h("button", { type: "button", class: "btn-small", onclick: newChat, disabled: busy }, "New chat"));
+    top.append(hist, window.BSPropX ? h("button", { type: "button", class: "btn-small ghost", onclick: () => { leasesOpen = !leasesOpen; paint(); } }, leasesOpen ? "Hide lease upload" : "Upload leases") : null,
+      h("button", { type: "button", class: "btn-small", onclick: newChat, disabled: busy }, "New chat"));
     s.append(top);
+    // Bulk lease upload: kept as one element so uploads and reads in progress survive repaints.
+    if (leasesOpen && window.BSPropX) {
+      if (!leaseBox) leaseBox = h("div", { class: "ai-leases" }, h("p", { class: "note" }, "Drop lease PDFs here (several at once is fine, amendments too). Each is read and matched to its property by address; check each one and approve it. The PDFs are filed in Documents under Property & leases."), window.BSPropX.leaseUploader({ propertyId: null }));
+      s.append(leaseBox);
+    }
     paintHistory();
 
     if (configured === false) s.append(h("div", { class: "ai-setup" }, h("strong", {}, "One step to turn this on. "),

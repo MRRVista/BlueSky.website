@@ -106,16 +106,27 @@
   /* ---------- "Other" dropdown (workbook tabs and workspace lists) ---------- */
   // Order as requested; workbook sheets are matched by name so a renamed slug still lands here.
   const OTHER = [
-    { match: (n) => n === "Statement Log" },
-    { match: (n) => n === "Assumptions" },
-    { match: (n) => /^Forecast/i.test(n), label: "Forecast Model" },
-    { match: (n) => n === "Loan & Closing" },
-    { match: (n) => n === "Schwab Tracker" },
-    { match: (n) => /^Matt/i.test(n) },
-    { match: (n) => /^Real #/i.test(n) },
-    { work: "discussion" },
-    { work: "watch" },
+    { work: "properties", group: "Workspace" },
+    { work: "documents", group: "Workspace" },
+    { work: "inputs", group: "Workspace" },
+    { work: "valuation", group: "Workspace" },
+    { work: "split", group: "Workspace" },
+    { work: "transactions", group: "Workspace" },
+    { work: "discussion", group: "Workspace" },
+    { work: "watch", group: "Workspace" },
+    { match: (n) => /^Dashboard\s*-\s*Historical/i.test(n), group: "Dashboards" },
+    { match: (n) => /^Dashboard\s*-\s*Forward/i.test(n), group: "Dashboards" },
+    { match: (n) => /^Income\s*-\s*Plan vs\.? Real/i.test(n), group: "Dashboards" },
+    { match: (n) => n === "Statement Log", group: "Workbook" },
+    { match: (n) => n === "Assumptions", group: "Workbook" },
+    { match: (n) => /^Forecast/i.test(n), label: "Forecast Model", group: "Workbook" },
+    { match: (n) => n === "Loan & Closing", group: "Workbook" },
+    { match: (n) => n === "Schwab Tracker", group: "Workbook" },
+    { match: (n) => /^Matt/i.test(n), group: "Workbook" },
+    { match: (n) => /^Real #/i.test(n), group: "Workbook" },
   ];
+  // Main tab bar order; anything else not in Other follows.
+  const MAIN = ["overview", "@dash", "cashflow", "taxplan", "ai", "admin"];
   let otherItems = [];
   let menu = null, menuY = 0;
   function closeMenu() {
@@ -128,7 +139,9 @@
     closeMenu();
     menu = el("ul", { class: "tab-menu", role: "menu", id: "other-menu" });
     const current = decodeURIComponent(location.hash.replace(/^#/, ""));
+    let lastGroup = null;
     otherItems.forEach((o) => {
+      if (o.group && o.group !== lastGroup) { menu.append(el("li", { role: "presentation", class: "tab-menu-head" }, o.group)); lastGroup = o.group; }
       const li = el("li", { role: "none" });
       const a = el("a", { href: `#${o.slug}`, role: "menuitem", "data-slug": o.slug }, o.name);
       if (o.slug === current) a.setAttribute("aria-current", "page");
@@ -160,7 +173,8 @@
   const wealthTabs = () => (window.BSWealth ? window.BSWealth.tabs.map((t) => ({ ...t, render: (r) => window.BSWealth.render(t.slug, r) })) : []);
   const splitTabs = () => (window.BSSplit ? window.BSSplit.tabs.map((t) => ({ ...t, render: (r) => window.BSSplit.render(t.slug, r) })) : []);
   const inputTabs = () => (window.BSInputs ? window.BSInputs.tabs.map((t) => ({ ...t, render: (r) => window.BSInputs.render(t.slug, r) })) : []);
-  const workTabs = () => wealthTabs().concat(splitTabs()).concat(aiTabs()).concat(propTabs()).concat(window.BSWork ? window.BSWork.tabs.map((t) => ({ ...t, render: (r) => window.BSWork.render(t.slug, r) })) : []).concat(inputTabs());
+  const txnTabs = () => (window.BSTxns ? window.BSTxns.tabs.map((t) => ({ ...t, render: (r) => window.BSTxns.render(t.slug, r) })) : []);
+  const workTabs = () => wealthTabs().concat(splitTabs()).concat(aiTabs()).concat(propTabs()).concat(window.BSWork ? window.BSWork.tabs.map((t) => ({ ...t, render: (r) => window.BSWork.render(t.slug, r) })) : []).concat(inputTabs()).concat(txnTabs());
 
   function show(slug) {
     if (!slug && window.BSWealth) slug = "overview"; // the Overview is the landing page
@@ -209,7 +223,8 @@
     sc.onload = res; sc.onerror = res;
     document.head.append(sc);
   }));
-  const loadWork = Promise.all([loadScript("/props.js", window.BSProps), loadScript("/workspace.js", window.BSWork), loadScript("/ai.js", window.BSAI), loadScript("/wealth.js", window.BSWealth), loadScript("/split.js", window.BSSplit), loadScript("/inputs.js", window.BSInputs)]);
+  const loadWork = Promise.all([loadScript("/props.js", window.BSProps), loadScript("/propx.js", window.BSPropX), loadScript("/workspace.js", window.BSWork), loadScript("/ai.js", window.BSAI), loadScript("/bsheet.js", window.BSBalance),
+    loadScript("/attention.js", window.BSAttention), loadScript("/wealth.js", window.BSWealth), loadScript("/split.js", window.BSSplit), loadScript("/inputs.js", window.BSInputs), loadScript("/txns.js", window.BSTxns)]);
 
   // The AI Assistant saved something: reload the data behind the affected tabs.
   window.addEventListener("bs:data-changed", (e) => {
@@ -217,6 +232,7 @@
     if (what.includes("portfolio")) getJson("/api/analytics").then((a) => { if (a) { analytics = a; window.BSAnalytics = a; } }).catch(() => {});
     if (what.includes("properties") && window.BSProps) window.BSProps.load(true).catch(() => {});
     if (what.includes("inputs") && window.BSInputs) window.BSInputs.load(true).catch(() => {});
+    if ((what.includes("balance") || what.includes("plaid")) && window.BSBalance) window.BSBalance.load(true).catch(() => {});
   });
 
   Promise.all([getJson("/api/analytics").catch(() => null), getJson("/api/report").catch(() => null), loadWork])
@@ -233,15 +249,17 @@
       otherItems = [];
       const inOther = new Set();
       OTHER.forEach((o) => {
-        if (o.work) { const t = works.find((x) => x.slug === o.work); if (t) { otherItems.push({ slug: t.slug, name: t.name }); inOther.add(t.slug); } return; }
+        if (o.work) { const t = works.find((x) => x.slug === o.work); if (t) { otherItems.push({ slug: t.slug, name: t.name, group: o.group }); inOther.add(t.slug); } return; }
         const sh = sheets.find((x) => o.match(x.name));
-        if (sh) { otherItems.push({ slug: sh.slug, name: o.label || sh.name }); inOther.add(sh.slug); }
+        if (sh) { otherItems.push({ slug: sh.slug, name: o.label || sh.name, group: o.group }); inOther.add(sh.slug); }
       });
       const W = (slug) => works.find((t) => t.slug === slug);
-      if (W("overview")) addTab("overview", W("overview").name);
-      if (analytics && window.BSDash) window.BSDash.tabs.forEach((t) => addTab(t.slug, t.name));
-      if (W("cashflow")) addTab("cashflow", W("cashflow").name);
-      works.filter((t) => !inOther.has(t.slug) && t.slug !== "overview" && t.slug !== "cashflow").forEach((t) => addTab(t.slug, t.name));
+      const placed = new Set();
+      MAIN.forEach((slug) => {
+        if (slug === "@dash") { if (analytics && window.BSDash) window.BSDash.tabs.forEach((t) => addTab(t.slug, t.name)); return; }
+        const t = W(slug); if (t && !inOther.has(slug)) { addTab(t.slug, t.name); placed.add(slug); }
+      });
+      works.filter((t) => !inOther.has(t.slug) && !placed.has(t.slug)).forEach((t) => addTab(t.slug, t.name));
       if (otherItems.length) {
         const li = el("li", { class: "tab-more-li" });
         const btn = el("button", { type: "button", class: "tab-more", "aria-haspopup": "menu", "aria-expanded": "false", "aria-controls": "other-menu" });

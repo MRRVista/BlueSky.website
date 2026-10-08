@@ -6,7 +6,7 @@ Blue Sky Investment Group — sign-in page and the 5100 Main Equity Strip report
 | Path | What it is |
 |---|---|
 | `/` | Sign-in page |
-| `/home` | Signed-in home: Overview (landing page), Performance, Income, Cash Flow, Account Split, AI Assistant, Properties, Documents, Admin, Inputs, Tax Plan, Valuation, an **Other** menu (Statement Log, Assumptions, Forecast Model, Loan & Closing, Schwab Tracker, Matt's, Real #s 8.24.2026, Discussion Topics, Watch Items), then The Report, Income & Worth It and The Honest Read |
+| `/home` | Signed-in home: Overview (landing page), Performance, Income, Cash Flow, Tax Plan, AI Assistant, Admin, and an **Other** menu in three groups: Workspace (Properties, Documents, Inputs, Valuation, Account Split, Transactions, Discussion Topics, Watch Items), Dashboards (Dashboard - Historical, Dashboard - Forward, Income - Plan vs Real) and Workbook (Statement Log, Assumptions, Forecast Model, Loan & Closing, Schwab Tracker, Matt's, Real #s) |
 | `/upload` | Schwab exports, statement PDFs and the report workbook |
 | `/account` | Change password |
 | `/api/login`, `/api/logout`, `/api/me`, `/api/change-password` | Auth endpoints |
@@ -36,9 +36,11 @@ To refresh after a new workbook: drop the `.xlsx` on the Upload page. `public/wo
 Old links `#gains` and `#tax` open the merged Performance and Income tabs.
 
 ## Overview and Cash Flow
-`public/wealth.js` combines the Schwab positions (`/api/analytics`), both properties (`/api/properties`) and every Admin-tab loan (`/api/loans`).
+`public/wealth.js` combines the Schwab positions (`/api/analytics`), the properties (`/api/properties`), every Admin-tab loan (`/api/loans`) and the balance sheet (`/api/balance`).
+- **Balance sheet** (`public/bsheet.js`, `lib/handlers/balance.js`, store `data/balance.json`): assets on top, liabilities below (shown negative), net worth at the bottom. Rows are the Schwab account, each property, each Inputs account, each Admin loan, Properties-tab mortgages and the implied margin loan, plus anything added on the Overview by hand or from a Plaid account. Types follow VistaWealthOffice's list (`lib/acctypes.js`) plus Margin loan, Medical Office, Retail and Mixed-use Commercial. Add, remove (restorable), drag or arrow to reorder, tag any row to a Plaid account, and link each liability to an asset. Linking an Admin loan writes its "Secured by". Adding a real-estate row creates a property on the Properties tab; removing it archives the property with its history. The first load matches existing rows to the Plaid accounts already connected and marks each automatic match for confirmation.
+- **Needs attention** (`public/attention.js`): missed rent, transactions to review, possible tenants, lease critical dates, tax-lot mismatches, possible wash sales, loan maturities, Plaid connections needing a reconnect.
 - Property value = NOI ÷ the market cap rate set on the Properties tab (or the entered value). NOI is the ledger's last 12 months, or the pro forma until a year of rent is on file.
-- Loans are tied to assets by their "Secured by" field; a property mortgage entered on the Properties tab is used only when no Admin loan secures that property.
+- A property mortgage entered on the Properties tab is used only when no Admin loan secures that property. Plaid-tagged loans use the Plaid balance with the Admin/Properties terms.
 - The forecaster's assumptions and custom cash flows are shared through `/api/plan` (`data/plan.json`). Tax rates come from the Income tab.
 
 ## Account Split
@@ -54,3 +56,19 @@ Old links `#gains` and `#tax` open the merged Performance and Income tabs.
 - **Tax Plan** runs `lib/taxengine.js`: Schedule B/D (capital-loss netting, $3,000 limit, carryforwards), Schedule E with straight-line, MACRS cost segregation and bonus, Form 8582 passive limits, Form 4952 investment interest (margin plus traced mortgage interest), SALT cap, QBI (Form 8995), progressive brackets with the 0/15/20% stack, NIIT (Form 8960), Illinois with the bonus addback, and a hypothetical sale (§1245, unrecaptured §1250, §1231, 1031). Parameters in `lib/taxparams.js` (2026, with sources) and overridable on the Inputs page.
 - **Valuation** is a cap-rate calculator; "Search current cap rates" asks Claude with web search for broker surveys and comparable sales (needs `ANTHROPIC_API_KEY`) and saves the result per building in `data/caprates/`.
 - **Plaid** uses the Vistamark Plaid client id; set `PLAID_SECRET` (same as vistarandall), optionally `PLAID_ENV=sandbox`, and `PLAID_REDIRECT_URI=https://bluesky.website/home` (allow-listed in the Plaid dashboard) for OAuth banks such as Schwab. Access tokens are AES-GCM encrypted in `data/plaid.json`. Matt and Jen connect or remove accounts.
+
+## Plaid, transaction archive and feeds
+`lib/plaidcore.js`, `lib/plaidsync.js`, `lib/handlers/plaid.js`; stores `data/plaid.json` (encrypted tokens) and `data/archive/transactions.json`.
+- One **Connect an account** button: Transactions required, Investments and Liabilities wherever the institution supports them, 24 months of history. Connections made before this button carry one product and 90 days; **Reconnect for full access** relinks them, retires the old connection, moves every tag to the new account ids and folds the old history into the new (rows that arrive later under new ids are de-duplicated on each sync).
+- The archive keeps every transaction permanently (past Plaid's 24 months), follows Plaid's corrections and removals, and keeps edits (category, property, note). The **Transactions** tab (`public/txns.js`, `/api/archive`) searches, edits and exports it.
+- Daily cron (`/api/work?r=daily`, 8am Central): Fed Funds, then every connection with cached balances. **Refresh live balances** on the Inputs tab asks banks for real-time balances (billed by Plaid).
+- Feeds (`lib/feeds.js`): the …965 account's investment transactions become Schwab-style rows for dates Schwab uploads don't cover (`txRanges`); Plaid holdings become a positions snapshot enriched with EODHD dividends (`lib/eod.js`: trailing yield, last dividend, ex-div and pay dates); a daily Plaid balance valuation point. Schwab uploads always win for their dates.
+- Property ledgers (`lib/propfeed.js`): transactions in each property's tagged accounts (and any transaction tagged to it on the Transactions tab) become rent, expenses, transfers or loan payments. Rent is detected from deposits by the same payer at the same amount (within 3%) for 3+ consecutive months; confirmed tenants post automatically; new payees go to **To review**; "Remember" saves a payee rule. Property taxes are recognized by county treasurer/collector payees.
+
+## Tax lots
+`lib/lots.js`, returned in `/api/analytics` as `lots` and shown on the Tax Plan tab. Rebuilt from every Schwab transaction: Schwab's Realized Gain/Loss lots where the export covers the date, otherwise Schwab's Tax Lot Optimizer order (short-term losses, long-term losses, no gain, long-term gains, short-term gains; highest cost first). Checked against the latest holdings; Schwab's wash-sale basis adjustments are carried on the replacement lots. Sales after the last realized export count in the tax plan until Schwab's file covers them; possible wash sales check buys in every connected investment account.
+
+## Properties, leases and metrics
+`public/props.js` + `public/propx.js`. Each property: profile (rentable/gross SF, use mix adding to 100%, equity invested), tagged bank accounts, tenants and a 12-month rent grid with missed-rent alerts, the To review list (post, split across categories or properties, transfer, ignore), leases, loans (Plaid liability detail where the lender reports it), property tax/insurance/basis/reserves, and metrics (occupancy, economic occupancy, rent/SF by use, NOI, opex ratio, WALT, concentration, DSCR, debt yield, LTV, cap rate, cash-on-cash, equity multiple).
+- **Leases** (`lib/handlers/leases.js`, queue `data/leases/pending.json`): bulk PDF upload on the Properties tab or the AI Assistant page; PDFs are filed in Documents (Property & leases), read one per request by Claude with a forced `record_lease` tool (fields with page numbers), matched to a property by address, and saved only after approval. Amendments apply to the lease they change. The **lease exhibit** shows the rent roll, expiration schedule and critical dates, exportable to Excel or printable.
+

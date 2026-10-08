@@ -228,7 +228,7 @@
   let filter = { cat: "", year: "" };
 
   function propChips(onPick, { compact } = {}) {
-    const ids = data.order || Object.keys(data.properties);
+    const ids = (data.order || Object.keys(data.properties)).filter((id) => data.properties[id] && data.properties[id].status !== "archived");
     return h("div", { class: "periodbar", role: "group", "aria-label": "Property" },
       compact ? h("span", { class: "pb-label" }, "Property") : null,
       ids.map((id) => {
@@ -249,9 +249,11 @@
     const redraw = () => draw(root);
     listeners.clear();
     listeners.add(redraw);
-    if (!data.properties[curProp]) curProp = (data.order || Object.keys(data.properties))[0];
+    const visible = (data.order || Object.keys(data.properties)).filter((id) => data.properties[id] && data.properties[id].status !== "archived");
+    if (!data.properties[curProp] || data.properties[curProp].status === "archived") curProp = visible[0];
+    if (!curProp) { root.replaceChildren(sheet("Properties", "No properties are on the balance sheet. Add one on the Overview (type it as real estate) and it opens here.")); return; }
     const p = data.properties[curProp];
-    const s = sheet("Properties", "Building details, rent, expenses and the mortgage for each property. Everything saves to the site for both of you and stays until it's changed. These figures feed the property layers on the Performance tab.");
+    const s = sheet("Properties", "Each building added on the Overview: profile and use mix, tenants and rent from the bank feed, leases read by AI, loans and the property metrics, then the building details, mortgage and ledger. Everything saves for both of you.");
     s.append(propChips(redraw));
     root.replaceChildren(s);
     if (p.status !== "active") return comingSoon(s, p);
@@ -274,6 +276,8 @@
       { label: "Loan balance today", value: bal == null ? "—" : usd(bal), sub: p.mortgage ? `of ${usd(p.mortgage.amount)} borrowed ${fmtDate(p.mortgage.loanDate)}` : "" },
     ]));
 
+    if (window.BSPropX) s.append(window.BSPropX.sections(p, curProp, run, data));
+    s.append(section("Building, mortgage and ledger"));
     s.append(buildingSection(p, run));
     s.append(mortgageSection(p, run));
     s.append(ledgerSection(root, p, run));
@@ -549,6 +553,8 @@
     tabs: [{ slug: "properties", name: "Properties" }],
     render,
     load, get data() { return data; }, catType, schedule, between, balanceOn, propChips,
+    // Reload and redraw the open Properties view (after a change saved somewhere else, e.g. a lease approved).
+    async reload() { await load(true); [...listeners].forEach((f) => f()); return data; },
     get current() { return curProp; }, set current(v) { curProp = v; try { sessionStorage.setItem("bs-prop", v); } catch {} },
   };
 })();

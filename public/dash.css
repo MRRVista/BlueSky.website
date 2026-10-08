@@ -181,3 +181,5 @@ details.lots summary { cursor: pointer; color: #183763; font-weight: 500; }
 .tab-menu a[aria-current="page"] { color: var(--mist); border-left-color: var(--gold); }
 /* Second section heading on a merged tab (Income → Tax picture) */
 .dash h2.sub-head { margin-top: 3rem; padding-top: 1.75rem; border-top: 1px solid #d8e0ec; scroll-margin-top: 4rem; }
+.tab-menu .tab-menu-head { padding: 0.55rem 1rem 0.2rem; font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--gold); }
+.tab-menu .tab-menu-head:not(:first-child) { margin-top: 0.3rem; border-top: 1px solid rgba(238, 243, 248, 0.1); }

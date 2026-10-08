@@ -69,6 +69,18 @@
     {
       "source": "/api/plaid",
       "destination": "/api/work?r=plaid"
+    },
+    {
+      "source": "/api/balance",
+      "destination": "/api/work?r=balance"
+    },
+    {
+      "source": "/api/archive",
+      "destination": "/api/work?r=archive"
+    },
+    {
+      "source": "/api/leases",
+      "destination": "/api/work?r=leases"
     }
   ],
   "headers": [
@@ -100,7 +112,7 @@
   ],
   "crons": [
     {
-      "path": "/api/work?r=fedfunds",
+      "path": "/api/work?r=daily",
       "schedule": "0 13 * * *"
     }
   ],
